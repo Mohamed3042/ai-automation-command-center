@@ -18,4 +18,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - run: python -m py_compile server.py app/*.py scripts/verify_live.py
       - run: python -m unittest discover -s tests -v
+      - name: Verify the live HTTP boundary
+        shell: bash
+        run: |
+          python server.py --reset > relayops-ci.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import time
+          from urllib.request import urlopen
+          for _ in range(50):
+              try:
+                  with urlopen("http://127.0.0.1:4173/api/health", timeout=1) as response:
+                      if response.status == 200:
+                          break
+              except Exception:
+                  time.sleep(0.1)
+          else:
+              raise SystemExit("RelayOps did not become ready")
+          PY
+          python scripts/verify_live.py

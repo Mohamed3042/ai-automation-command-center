@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from app.dashboard import alerts_payload, connectors_payload, dashboard_payload
 from app.db import init_db
-from app.engine import evaluate_alert_rules, run_workflow, workflows_payload
+from app.engine import FailureInjector, evaluate_alert_rules, run_workflow, workflows_payload
 from app.intelligence import LLMAdapter, detect_sales_anomalies, demand_forecast, support_intelligence
 from app.reports import generate_report
 
@@ -41,7 +41,7 @@ class PlatformTestCase(unittest.TestCase):
 
     def test_workflow_chains_persist_success_and_failure_paths(self):
         success = run_workflow(self.connection, 1)
-        failure = run_workflow(self.connection, 4, force_error=True)
+        failure = run_workflow(self.connection, 4, failure_injector=FailureInjector(action="accounting.reconcile", fail_attempts=10))
         self.assertEqual(success["status"], "success")
         self.assertEqual(len(success["steps"]), 4)
         self.assertEqual(failure["status"], "failed")
@@ -61,6 +61,7 @@ class PlatformTestCase(unittest.TestCase):
         forecast = demand_forecast(self.connection)
         self.assertEqual(len(forecast["points"]), 14)
         self.assertGreater(forecast["projected_revenue"], 0)
+        run_workflow(self.connection, 2)
         self.assertGreaterEqual(support_intelligence(self.connection)["metrics"]["automation_rate"], 80)
 
     def test_report_scheduler_writes_real_html_and_csv(self):
@@ -85,10 +86,13 @@ class PlatformTestCase(unittest.TestCase):
         self.assertGreater(len(payload["deliveries"]), 0)
 
     def test_workflow_catalog_exposes_steps_and_run_history(self):
+        run_workflow(self.connection, 1)
+        run_workflow(self.connection, 4, failure_injector=FailureInjector(action="email.send", fail_attempts=10))
         payload = workflows_payload(self.connection)
         self.assertEqual(payload["metrics"]["active"], 4)
         self.assertTrue(all(len(item["steps"]) == 4 for item in payload["workflows"]))
         self.assertTrue(any(run["status"] == "failed" for run in payload["recent_runs"]))
+        self.assertGreater(payload["metrics"]["hours_saved"]["minutes"], 0)
 
 
 if __name__ == "__main__":

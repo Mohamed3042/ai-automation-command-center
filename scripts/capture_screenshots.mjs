@@ -7,7 +7,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const outputDir = path.join(root, 'examples');
 const baseUrl = (process.argv[2] || 'http://127.0.0.1:4173').replace(/\/$/, '');
 const executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const views = ['overview', 'integrations', 'automations', 'intelligence', 'reports', 'alerts'];
+const views = ['overview', 'integrations', 'automations', 'builder', 'intelligence', 'reports', 'alerts'];
 
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await puppeteer.launch({

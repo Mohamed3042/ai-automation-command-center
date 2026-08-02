@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from .db import DEMO_TODAY, rows_as_dicts
+from .alerts import alerts_payload as lifecycle_alerts_payload
 
 
 def _delta(current: float, previous: float) -> float:
@@ -40,8 +41,9 @@ def dashboard_payload(connection, days: int = 7, store: str = "All stores") -> d
         (start.isoformat(), end.isoformat()),
     ).fetchall())
     events = rows_as_dicts(connection.execute("SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 6").fetchall())
-    open_alerts = connection.execute("SELECT COUNT(*) count FROM alerts WHERE status IN ('open','investigating')").fetchone()["count"]
-    workflow_quality = connection.execute("SELECT SUM(runs_30d * success_rate) / SUM(runs_30d) success_rate, SUM(runs_30d) runs FROM workflows").fetchone()
+    open_alerts = connection.execute("SELECT COUNT(*) count FROM alerts WHERE status IN ('open','acknowledged','investigating')").fetchone()["count"]
+    workflow_quality = connection.execute("SELECT COUNT(*) runs,SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) successes FROM workflow_runs WHERE evidence_source='executed' AND started_at>=datetime('now','-30 days')").fetchone()
+    success_rate = (workflow_quality["successes"] or 0) / workflow_quality["runs"] * 100 if workflow_quality["runs"] else 0
     return {
         "scope": {"days": days, "store": store, "period_start": start.isoformat(), "period_end": end.isoformat()},
         "stores_filter": ["All stores"] + [row["store"] for row in stores],
@@ -49,7 +51,7 @@ def dashboard_payload(connection, days: int = 7, store: str = "All stores") -> d
             {"id": "revenue", "label": "Net revenue", "value": round(revenue - returns, 2), "format": "currency", "delta": _delta(revenue, previous_revenue), "note": f"vs prior {days} days"},
             {"id": "orders", "label": "Orders", "value": orders, "format": "integer", "delta": _delta(orders, previous_orders), "note": f"across {6 if store == 'All stores' else 1} channels / stores"},
             {"id": "margin", "label": "Gross margin", "value": round(margin / revenue * 100, 1) if revenue else 0, "format": "percent", "delta": round((margin / revenue * 100 if revenue else 0) - previous_margin_pct, 1), "note": "percentage-point movement"},
-            {"id": "automation", "label": "Automation success", "value": round(workflow_quality["success_rate"], 1), "format": "percent", "delta": 0.8, "note": f"{workflow_quality['runs']:,} runs · 30 days"},
+            {"id": "automation", "label": "Automation success", "value": round(success_rate, 1), "format": "percent", "delta": 0, "note": f"{workflow_quality['runs']:,} truthful runs · 30 days"},
         ],
         "timeline": timeline,
         "categories": categories,
@@ -76,19 +78,4 @@ def connectors_payload(connection) -> dict:
 
 
 def alerts_payload(connection) -> dict:
-    alerts = rows_as_dicts(connection.execute("SELECT * FROM alerts ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, created_at DESC").fetchall())
-    deliveries = rows_as_dicts(connection.execute(
-        "SELECT d.*, a.title alert_title, a.severity FROM alert_deliveries d JOIN alerts a ON a.id=d.alert_id ORDER BY d.sent_at DESC, d.id DESC LIMIT 24"
-    ).fetchall())
-    counts = {severity: sum(item["severity"] == severity and item["status"] != "acknowledged" for item in alerts) for severity in ("critical", "high", "medium", "low")}
-    return {
-        "alerts": alerts,
-        "deliveries": deliveries,
-        "counts": counts,
-        "policies": [
-            {"severity": "Critical", "ack": "15 min", "channels": "In-app → WhatsApp → Email", "owner": "Duty manager"},
-            {"severity": "High", "ack": "30 min", "channels": "In-app → WhatsApp", "owner": "Functional lead"},
-            {"severity": "Medium", "ack": "60 min", "channels": "In-app", "owner": "Operations queue"},
-            {"severity": "Low", "ack": "Next business day", "channels": "In-app digest", "owner": "Source owner"},
-        ],
-    }
+    return lifecycle_alerts_payload(connection)

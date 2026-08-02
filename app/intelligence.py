@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import math
 import os
 import re
+import json
 from collections import defaultdict
 from statistics import mean, median
+from urllib.request import Request, urlopen
 
 from .db import DEMO_TODAY, rows_as_dicts
+
+
+_PROVIDER_STATE = {"active": "offline-rules", "last_error": None, "last_used_at": None}
 
 
 class LLMAdapter:
@@ -26,14 +30,30 @@ class LLMAdapter:
         "Product": ("warranty", "dimensions", "weight", "include", "cover"),
     }
 
-    def __init__(self, provider: str | None = None) -> None:
-        self.provider = provider or os.environ.get("RELAYOPS_LLM_PROVIDER", "offline-rules")
+    def __init__(self, provider: str | None = None, api_key: str | None = None, endpoint: str | None = None, model: str | None = None, opener=None) -> None:
+        self.api_key = api_key if api_key is not None else os.environ.get("RELAYOPS_LLM_API_KEY")
+        self.provider = provider or ("hosted-openai-compatible" if self.api_key else "offline-rules")
+        self.endpoint = endpoint or os.environ.get("RELAYOPS_LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions")
+        self.model = model or os.environ.get("RELAYOPS_LLM_MODEL", "gpt-4.1-mini")
+        self.opener = opener or urlopen
 
     @property
     def mode(self) -> str:
-        return "Deterministic offline fallback" if self.provider == "offline-rules" else self.provider
+        if self.provider == "offline-rules" or not self.api_key:
+            return "Deterministic offline fallback"
+        return f"Hosted provider · {self.model}"
 
     def classify(self, subject: str, body: str) -> dict:
+        if self.provider != "offline-rules" and self.api_key:
+            try:
+                result = self._classify_hosted(subject, body)
+                _PROVIDER_STATE.update({"active": "hosted-openai-compatible", "last_error": None, "last_used_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
+                return result
+            except Exception as exc:
+                _PROVIDER_STATE.update({"active": "offline-rules", "last_error": str(exc)[:160], "last_used_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()})
+        return self._classify_offline(subject, body)
+
+    def _classify_offline(self, subject: str, body: str) -> dict:
         text = re.sub(r"[^a-z0-9 ]", " ", f"{subject} {body}".lower())
         scores = {}
         for category, keywords in self.KEYWORDS.items():
@@ -45,7 +65,44 @@ class LLMAdapter:
         urgency = sum(term in text for term in urgency_terms)
         priority = "urgent" if urgency >= 2 or "charged twice" in text else "high" if urgency else "normal"
         confidence = min(0.98, 0.76 + score * 0.045)
-        return {"category": category, "priority": priority, "confidence": round(confidence, 2), "adapter": self.mode}
+        return {"category": category, "priority": priority, "confidence": round(confidence, 2), "adapter": "Deterministic offline fallback"}
+
+    def _classify_hosted(self, subject: str, body: str) -> dict:
+        payload = {
+            "model": self.model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": "Classify a retail support message. Return JSON with category, priority, and confidence. Allowed categories: Payment, Delivery, Returns, Availability, Account, Product, General. Allowed priorities: urgent, high, normal, low."},
+                {"role": "user", "content": f"Subject: {subject}\nBody: {body}"},
+            ],
+        }
+        request = Request(self.endpoint, data=json.dumps(payload).encode("utf-8"), headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST")
+        with self.opener(request, timeout=8) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+        content = response_data["choices"][0]["message"]["content"].strip().removeprefix("```json").removesuffix("```").strip()
+        result = json.loads(content)
+        allowed_categories = set(self.KEYWORDS) | {"General"}
+        if result.get("category") not in allowed_categories or result.get("priority") not in {"urgent", "high", "normal", "low"}:
+            raise ValueError("Hosted provider returned an unsupported classification")
+        confidence = max(0.0, min(1.0, float(result.get("confidence", 0.8))))
+        return {"category": result["category"], "priority": result["priority"], "confidence": round(confidence, 2), "adapter": f"Hosted provider · {self.model}"}
+
+    def status(self) -> dict:
+        configured = bool(self.api_key and self.provider != "offline-rules")
+        active = _PROVIDER_STATE["active"] if configured else "offline-rules"
+        return {
+            "active": active,
+            "configured": configured,
+            "label": f"Hosted provider · {self.model}" if active == "hosted-openai-compatible" else "Deterministic offline fallback",
+            "model": self.model if configured else "keyword-rules-v3",
+            "endpoint": self.endpoint.split("/v1/")[0] if configured else "local process",
+            "last_error": _PROVIDER_STATE["last_error"] if configured else None,
+            "last_used_at": _PROVIDER_STATE["last_used_at"] if configured else None,
+            "external_keys_required": False,
+            "fallback_available": True,
+            "capabilities": ["classification", "anomaly detection", "demand forecasting"],
+        }
 
 
 def _mad_zscore(value: float, history: list[float]) -> float:
@@ -150,14 +207,10 @@ def support_intelligence(connection) -> dict:
 
 
 def intelligence_payload(connection) -> dict:
+    adapter = LLMAdapter()
     return {
         "anomalies": detect_sales_anomalies(connection),
         "forecast": demand_forecast(connection),
         "support": support_intelligence(connection),
-        "adapter": {
-            "active": "offline-rules",
-            "label": "Deterministic offline fallback",
-            "external_keys_required": False,
-            "capabilities": ["classification", "anomaly detection", "demand forecasting"],
-        },
+        "adapter": adapter.status(),
     }

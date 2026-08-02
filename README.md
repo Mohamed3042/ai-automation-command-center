@@ -2,246 +2,260 @@
 
 ![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/data-SQLite-0f80cc?logo=sqlite&logoColor=white)
-![No external keys](https://img.shields.io/badge/AI-offline%20by%20default-16a36a)
-![Tests](https://img.shields.io/badge/tests-7%20passing-16a36a)
-![Release](https://img.shields.io/badge/release-v1.0.0-5b4ce8)
+![AI fallback](https://img.shields.io/badge/AI-offline%20fallback-16a36a)
+![Tests](https://img.shields.io/badge/tests-56%20passing-16a36a)
+![Release](https://img.shields.io/badge/release-v1.1.0-5b4ce8)
 
-RelayOps is a self-contained operations platform for a mid-size retail group. It connects commerce, finance, support, messaging, and spreadsheet systems; runs chained automations; applies useful AI; exposes drillable KPIs; produces real scheduled files; and escalates operational exceptions with a delivery audit trail.
+RelayOps is a self-contained retail operations control plane. Version 1.1 executes its workflows against SQLite, measures real runtimes and row counts, dispatches cron jobs from a background scheduler, lets operators build workflows in the UI, and tracks alerts from acknowledgement through resolution.
 
-It runs locally with Python and SQLite. The AI adapter defaults to deterministic offline inference, so the complete demo works without credentials or third-party services.
+The application runtime has no third-party Python dependency and requires no key. An optional OpenAI-compatible classification provider can be enabled with an environment variable; a deterministic offline adapter remains the automatic fallback.
 
 ![RelayOps executive overview](examples/overview.png)
 
-## What the demo proves
+## What is real in v1.1
 
-- Six production-shaped connector contracts on a live integration map, with health, uptime, latency, error rate, throughput, sync actions, and a degraded-state example.
-- A lightweight workflow engine with event/schedule/manual triggers, ordered steps, persisted runs, per-step outputs, retries, skipped branches, error details, and alert escalation.
-- An AI layer behind a provider adapter: robust sales anomaly detection, 14-day demand forecasting, inventory risk scoring, and support intent/priority classification.
-- An executive KPI surface with 1/7/30-day filters and store/channel drill-down.
-- A report scheduler that writes downloadable HTML and CSV artifacts for daily, weekly, and inventory reporting.
-- An alert engine with severity, acknowledgement windows, deduplication, escalation policy, and in-app/WhatsApp-style/email delivery receipts.
+- Order automation reads twelve staged POS/web orders, validates them, writes canonical orders, posts balanced debit/credit ledger entries, and refreshes the KPI cache.
+- Support automation reads only unclassified tickets, calls `LLMAdapter`, persists category/confidence/priority, applies SLA rules, and writes queue assignments.
+- Inventory automation snapshots stock, refreshes the forecast cache, creates deduplicated replenishment tasks, and records buyer-queue messages.
+- Finance close aggregates sales rows, reconciles the posted ledger, writes HTML/CSV files, and records distribution.
+- Every attempt has a clock-measured duration, actual row count, output/error payload, and configured retry/backoff policy. Terminal failures persist downstream skips and create an alert.
+- A daemon scheduler evaluates five-field UTC cron expressions, fires workflow and report jobs, advances next-run times, records scheduler events, and enforces overdue alert escalation.
+- The workflow builder creates, edits, reorders, enables, and pauses persisted definitions and executable steps.
+- Alerts follow the strict lifecycle `open → acknowledged → investigating → resolved`, with mute rules, delivery receipts, escalation levels, and an immutable timeline.
 
-All connector calls in this public portfolio build use deterministic seeded adapters. The contracts, transformations, health telemetry, run engine, database writes, reports, and UI interactions are real; no claim is made that the demo is connected to a live tenant.
+The six connector surfaces are deterministic local adapters, not claims of access to live vendor tenants. “WhatsApp” and “Email” outputs are durable delivery receipts in the local store. Connector sync controls refresh real SQLite checkpoints. This boundary keeps a fresh clone reproducible while the workflow engine itself performs genuine data work.
 
 ## Run it
 
-Requirements: macOS, Linux, or Windows with Python 3.9 or newer. There are no third-party Python dependencies.
+Requirements: Python 3.9 or newer.
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Mohamed3042/ai-automation-command-center.git
 cd ai-automation-command-center
 python3 server.py --reset
 ```
 
-Open [http://127.0.0.1:4173](http://127.0.0.1:4173). `--reset` rebuilds the deterministic demo snapshot; omit it to retain workflow runs, acknowledgements, and generated-report metadata between sessions.
+Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
-Run the verification suite:
+`--reset` recreates the same seeded business snapshot and clears prior execution evidence. Omit it to preserve workflows, runs, lifecycle events, and report metadata. The scheduler runs only while the server process is alive.
+
+Verify the release from another terminal:
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 scripts/verify_live.py
 ```
 
-Recreate every screenshot with the running server:
+Run the browser audit and recapture all seven application screens plus the generated report preview:
 
 ```bash
 npm install
+node scripts/audit_ui.mjs http://127.0.0.1:4173
 npm run screenshots -- http://127.0.0.1:4173
 ```
 
-The Node dependency is only for browser verification and screenshot capture. It is not part of the application runtime.
+Node and Chrome are development-only screenshot tools; neither is part of the server runtime.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Systems[Retail systems]
-        POS[Square POS]
-        WEB[Shopify Plus]
-        ERP[Oracle NetSuite]
-        MAIL[Microsoft 365 Mail]
-        MSG[WhatsApp Business]
-        SHEET[Google Sheets]
+    subgraph Inputs[Seeded adapter boundary]
+      POS[POS / web orders]
+      MAIL[Support inbox]
+      STOCK[Inventory]
     end
-
-    subgraph RelayOps[RelayOps control plane]
-        ADAPTERS[Connector adapters\nREST · webhook · Graph · Cloud API · SuiteTalk · Sheets]
-        EVENTS[Canonical event + data model]
-        DB[(SQLite operational store)]
-        WF[Workflow engine\ntriggers · steps · retries · run history]
-        AI[LLM / AI adapter\noffline deterministic fallback]
-        KPI[KPI service\nfilters · drill-down]
-        REPORTS[Report scheduler\nHTML · CSV]
-        ALERTS[Alert engine\nseverity · dedupe · escalation]
+    subgraph Runtime[RelayOps process]
+      HTTP[Threaded HTTP API]
+      SCHED[Background cron scheduler]
+      ENGINE[Workflow engine\nsavepoints · retries · clocks]
+      ACTIONS[Executable action registry]
+      LLM[LLMAdapter\nhosted optional · offline fallback]
+      ALERTS[Alert lifecycle + escalation]
+      REPORTS[HTML / CSV renderer]
     end
+    DB[(SQLite + WAL)]
+    UI[Operator command center]
+    FILES[Report vault]
 
-    subgraph Outputs[Operational outputs]
-        UI[Command center]
-        FILES[Report vault]
-        DELIVERY[In-app · WhatsApp-style · email logs]
-    end
-
-    POS & WEB & ERP & MAIL & MSG & SHEET --> ADAPTERS
-    ADAPTERS --> EVENTS --> DB
-    DB --> WF & AI & KPI & REPORTS & ALERTS
-    AI --> WF & ALERTS
-    WF --> DB
-    KPI --> UI
-    REPORTS --> FILES
-    ALERTS --> DELIVERY
+    POS & MAIL & STOCK --> DB
+    UI <--> HTTP <--> DB
+    SCHED --> ENGINE --> ACTIONS --> DB
+    ACTIONS --> LLM
+    SCHED --> ALERTS --> DB
+    SCHED --> REPORTS --> FILES
 ```
 
-The backend is deliberately compact: a threaded standard-library HTTP service owns the API boundary, domain modules own the workflow/AI/report logic, and SQLite provides a portable audit store. The browser client is a no-framework SPA using semantic HTML, responsive CSS, and generated SVG charts.
+SQLite savepoints wrap each workflow attempt. A failed action is rolled back before its attempt record is written; successful attempts commit their business mutation and evidence together. The scheduler uses its own connection and a tick lock, so HTTP-triggered checks and the background thread cannot dispatch the same in-process tick concurrently.
 
-## Systems connected
+## Executable action catalog
 
-| Business capability | System | Contract represented | Live evidence in the demo |
-|---|---|---|---|
-| Point of sale | Square POS | REST adapter | 18,420 records/day, health, latency, order ingestion |
-| E-commerce | Shopify Plus | Webhook adapter | Order events, schema validation, commerce throughput |
-| Accounting | Oracle NetSuite | SuiteTalk-style adapter | Journal posting, reconciliation, degraded latency, retry path |
-| Email | Microsoft 365 Mail | Microsoft Graph-style adapter | Support ingestion and report distribution |
-| Messaging | WhatsApp Business | Cloud API-style adapter | Support intake and high-severity escalation delivery |
-| Spreadsheets | Google Sheets | Sheets API-style adapter | Inventory reads and operational data exchange |
+| Action | Concrete store effect |
+|---|---|
+| `webhook.validate` | Validates pending staged-order JSON and marks valid rows |
+| `transform.map` | Inserts canonical orders and advances staging state |
+| `accounting.post` | Writes balanced receivable/sales ledger pairs |
+| `metrics.increment` | Upserts ingested-order, revenue, and ledger-variance KPIs |
+| `message.receive` | Reads unclassified ticket IDs |
+| `ai.classify` | Classifies and updates tickets through `LLMAdapter` |
+| `rules.evaluate` | Applies support SLA policy or creates replenishment tasks |
+| `ticket.assign` | Persists functional queue assignments |
+| `sheet.read` | Writes current inventory snapshots |
+| `ai.forecast` | Computes and caches the 14-day projection |
+| `message.send` | Writes deduplicated buyer-queue delivery receipts |
+| `sales.aggregate` | Upserts daily close totals from sales rows |
+| `accounting.reconcile` | Reads the posted ledger and enforces variance tolerance |
+| `report.render` | Generates and indexes report files |
+| `email.send` | Records a deduplicated finance distribution receipt |
 
-## Tools and techniques used
+## Retry and failure injection
 
-| Layer | Tooling | What it does here |
-|---|---|---|
-| Application | Python 3.9+ standard library | HTTP server, routing, validation, workflow execution, scheduling logic |
-| Data | SQLite with WAL and foreign keys | Connectors, sales, tickets, workflows, step runs, alerts, deliveries, schedules, and reports |
-| Automation | Custom RelayOps workflow engine | Chained steps, manual/event/schedule triggers, retries, failure branches, audit history |
-| AI adapter | `LLMAdapter` with offline rules | Stable provider boundary; deterministic local classification with zero keys |
-| Anomaly detection | Median absolute deviation + rolling baseline | Flags material store/category sales deviations with explainable scores |
-| Forecasting | Linear trend + weekday seasonality | Produces a 14-day revenue forecast, confidence band, and inventory risks |
-| Frontend | Vanilla JavaScript, CSS, HTML, SVG | Six-screen operations console, filters, drill-downs, live actions, charts |
-| Reports | Python `csv` + print-ready HTML | Real daily/weekly/inventory files, persisted metadata, download endpoint |
-| Quality | `unittest`, live HTTP verifier, Puppeteer Core + Chrome | Domain tests, end-to-end mutations, full-page visual captures |
-| Release | Git, GitHub CLI, GitHub Actions | Source history, automated tests, semantic tag, published release |
+Each step owns `retry_limit` and `retry_backoff_ms`; total attempts are `1 + retry_limit`. Tests and the operator retry drill use a targeted `FailureInjector`:
 
-## Measurable results on the seeded data
+```json
+{
+  "failure_injection": {
+    "action": "accounting.reconcile",
+    "fail_attempts": 1,
+    "message": "Transient adapter fault"
+  }
+}
+```
 
-The fixed 42-day snapshot contains 1,764 store/category sales aggregates, six stores/channels, ten priority SKUs, twelve support conversations, four workflows, and six connectors. Results are reproducible after every `--reset`.
+This fails only the named action for the requested number of attempts. It is explicit, bounded, and injectable; ordinary business failures still originate in action validation and reconciliation logic.
 
-| Measure | Demonstrated result |
+## Scheduler semantics
+
+- Five fields: minute, hour, day of month, month, weekday.
+- Supports wildcards, steps such as `*/30`, comma lists, and numeric ranges.
+- Uses UTC; the UI shows both the cron expression and localized next-run time.
+- Standard cron day-of-month/day-of-week OR behavior is implemented when both are restricted.
+- Missed schedules fire once on the next tick and advance from the current time rather than replaying an unbounded backlog.
+- Workflow runs, report runs, errors, scheduled-for time, and fired-at time are persisted in `scheduler_events`.
+- Overdue unresolved alerts are delivered at the next escalation level unless an active source/severity mute applies.
+
+## AI provider configuration
+
+Offline mode is the default:
+
+```bash
+python3 server.py --reset
+```
+
+To use a hosted OpenAI-compatible chat-completions endpoint for support classification:
+
+```bash
+export RELAYOPS_LLM_API_KEY="..."
+export RELAYOPS_LLM_MODEL="gpt-4.1-mini"                    # optional
+export RELAYOPS_LLM_ENDPOINT="https://api.openai.com/v1/chat/completions"  # optional
+python3 server.py
+```
+
+Provider configuration, active mode, model, last use, and fallback errors are visible in AI Intelligence and `/api/health`. The API key is never returned or stored. A provider error falls back to deterministic keyword rules for that classification.
+
+## Hours-saved calculation
+
+RelayOps does not store a headline hours constant. It calculates cumulative time returned from successful attempt evidence:
+
+`Σ(manual_minutes × actual successful records)` for per-record steps, plus `manual_minutes` once for each successful per-run step.
+
+The estimates are deliberately visible and editable in the builder:
+
+| Workflow step | Estimate | Basis |
+|---|---:|---|
+| Validate staged orders | 0.10 min | per record |
+| Normalize orders | 0.35 min | per record |
+| Post ledger entries | 0.60 min | per order |
+| Refresh KPI cache | 4.00 min | per run |
+| Read unclassified conversations | 0.25 min | per record |
+| Classify intent | 1.20 min | per record |
+| Score priority | 0.40 min | per record |
+| Route to queue | 0.60 min | per record |
+| Snapshot stock levels | 0.35 min | per record |
+| Refresh demand forecast | 6.00 min | per run |
+| Create replenishment tasks | 1.20 min | per task |
+| Notify buyer queue | 0.50 min | per message |
+| Aggregate channel totals | 12.00 min | per run |
+| Reconcile ledger | 15.00 min | per run |
+| Generate daily close report | 8.00 min | per run |
+| Record report distribution | 2.00 min | per run |
+
+After the release verifier’s observed run set, the UI reports 161.9 minutes (2.7 hours). A fresh reset begins at zero execution-derived minutes before any due scheduler job fires.
+
+## Seeded analytical results
+
+The fixed snapshot contains 1,764 store/category daily aggregates, six stores/channels, ten SKUs, twelve support conversations, twelve staged orders, four seeded workflows, and six connector contracts.
+
+| Measure | Deterministic snapshot result |
 |---|---:|
-| Connected systems | 6 across POS, e-commerce, accounting, email, messaging, and spreadsheets |
-| Connector throughput | 30,336 normalized records/events today |
-| Average connector uptime | 99.85% trailing 30 days |
 | Seven-day net revenue | $1,860,351 |
 | Seven-day orders | 27,341 |
 | Gross margin | 36.5% |
-| Workflow volume / weighted success | 15,346 runs / 99.6% |
-| Estimated operator time returned | 286 hours per month |
-| High-confidence sales anomalies | 2: Downtown Electronics +106.2%; Online Beauty +41.2% |
+| High-confidence sales anomalies | 2 |
 | Fourteen-day revenue forecast | $4.085M at 91% confidence |
-| Support auto-routing | 83.3%; median first response 17.5 minutes |
-| Live failure exercise | 3 retries, 1 failed step, downstream skip, 2 escalation deliveries |
-| Alert-rule exercise | 7 rules matched, 7 alerts created, 13 delivery receipts |
-| Generated outputs | Daily and weekly HTML + CSV, plus inventory HTML + CSV |
+| Support auto-routing after classification | 83.3% |
+| Order verifier | 12 canonical orders, 24 balanced ledger rows |
+| Terminal retry exercise | 3 attempts, 2 retries, downstream skips, alert created |
 
-`286 hours` is an explicit estimate derived from seeded automation volumes. Revenue, orders, margins, run status, anomaly values, forecast, report rows, alert counts, and delivery records are computed from or persisted into the demo database.
+Workflow volume, success rate, duration, row counts, scheduler success, and hours returned intentionally start from observed execution evidence instead of seeded claims.
 
-## Major screens
+## Screens
 
-| Integration control plane | Automation operations |
+| Integrations | Automation operations |
 |---|---|
-| ![Live integration map](examples/integrations.png) | ![Workflow automation engine](examples/automations.png) |
+| ![Integration map](examples/integrations.png) | ![Truthful workflow runs](examples/automations.png) |
 
-| AI intelligence | Reports and distribution |
+| Workflow builder | AI intelligence |
 |---|---|
-| ![AI intelligence](examples/intelligence.png) | ![Report scheduler and library](examples/reports.png) |
+| ![Workflow builder](examples/builder.png) | ![AI provider and intelligence](examples/intelligence.png) |
 
-![Alert engine and escalation delivery log](examples/alerts.png)
-
-## Real generated report files
-
-The report scheduler writes files to `data/reports/` at runtime. Reproducible examples from the verified release are committed here:
-
-- [Daily Trading Brief — HTML](examples/reports/daily-trading-brief.html) · [CSV](examples/reports/daily-trading-brief.csv)
-- [Weekly Operations Review — HTML](examples/reports/weekly-operations-review.html) · [CSV](examples/reports/weekly-operations-review.csv)
-
-![Generated weekly operations report](examples/generated-weekly-report.png)
-
-## Workflow engine behavior
-
-The four seeded automations cover omnichannel order sync, support triage/routing, inventory risk monitoring, and daily finance close. A run:
-
-1. resolves its trigger and ordered step definitions;
-2. persists the run before execution;
-3. stores each step’s status, duration, attempt, adapter, output, and error;
-4. retries the configured failure branch up to three times;
-5. marks remaining steps skipped when a branch cannot continue;
-6. creates an operational alert and channel delivery receipts;
-7. leaves the full record visible in Automation Operations and Alerts.
-
-`scripts/verify_live.py` exercises one successful order workflow and one forced finance-close failure through the public HTTP API.
-
-## AI and offline behavior
-
-`LLMAdapter` is the seam for a hosted provider, but its default is `offline-rules`. No environment variable or network access is required.
-
-- Support classification uses deterministic weighted intent terms plus urgency rules and confidence scoring.
-- Sales anomalies use a robust median-absolute-deviation score and a minimum 30% materiality gate.
-- Demand forecasting fits a deterministic trend, applies learned weekday seasonality, and exposes ±9% confidence bounds.
-- Inventory risk compares current stock, reorder points, and forecast demand to calculate cover days.
-
-This design keeps business workflows stable if the model provider changes or is unavailable, and makes the portfolio demo reproducible.
-
-## How this maps to your screening questions
-
-### 1. Which systems have you connected?
-
-The Integration Control Plane answers this visually and operationally: Square POS, Shopify Plus, Oracle NetSuite, Microsoft 365 Mail, WhatsApp Business, and Google Sheets. Each connector exposes its contract type, health, latency, uptime, error rate, throughput, and sync action. The map also shows how those systems converge on a canonical event/data plane.
-
-### 2. Which AI and automation tools have you used, and what results did they achieve?
-
-The Automation Operations screen demonstrates a custom workflow engine with triggers, chained steps, persisted execution history, retries, failure branches, and escalations. AI Intelligence shows the adapter pattern plus explainable anomaly detection, demand forecasting, inventory risk, and support categorization. The seeded result table above quantifies throughput, success rate, anomalies, forecast value/confidence, routing rate, response time, and time returned.
-
-### 3. What is your experience with dashboards, KPIs, automated reports, and operational alerts?
-
-The Executive Overview provides period filters, store drill-down, KPI deltas, revenue trend, category mix, store performance, and audit activity. Reports & Distribution schedules and generates real daily/weekly files. Alerts & Escalation demonstrates severity, ownership, acknowledgement windows, deduplication, multi-channel escalation, and delivery receipts.
+| Reports | Alert lifecycle |
+|---|---|
+| ![Scheduler and report vault](examples/reports.png) | ![Alert lifecycle timeline](examples/alerts.png) |
 
 ## API surface
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/api/dashboard?days=7&store=All%20stores` | KPIs, trend, category/store drill-down, audit events |
-| `GET` | `/api/connectors` | Connector map, contracts, health, throughput |
-| `POST` | `/api/connectors/{id}/sync` | Run a connector sync checkpoint |
-| `GET` | `/api/workflows` | Workflow definitions, steps, recent run history |
-| `POST` | `/api/workflows/{id}/run` | Execute a persisted workflow run |
-| `GET` | `/api/intelligence` | Anomalies, forecast, inventory risk, support triage |
-| `POST` | `/api/intelligence/refresh` | Recalculate the offline AI layer |
-| `GET` | `/api/reports` | Schedules and generated-file metadata |
-| `POST` | `/api/reports/generate` | Generate daily, weekly, or inventory HTML/CSV |
-| `GET` | `/api/alerts` | Alerts, escalation policy, delivery log |
-| `POST` | `/api/alerts/evaluate` | Evaluate threshold rules and deliver new alerts |
-| `POST` | `/api/alerts/{id}/ack` | Persist acknowledgement state and time |
+| `GET` | `/api/health` | Database, scheduler, version, and provider state |
+| `GET` | `/api/dashboard` | KPIs, timeline, drill-downs, audit activity |
+| `GET/POST` | `/api/connectors`, `/api/connectors/{id}/sync` | Connector state and checkpoint refresh |
+| `GET/POST` | `/api/workflows`, `/api/workflows` | List and create definitions |
+| `PUT` | `/api/workflows/{id}` | Edit metadata and ordered steps |
+| `POST` | `/api/workflows/{id}/toggle` | Enable or pause event/scheduled execution |
+| `POST` | `/api/workflows/{id}/run` | Execute with optional targeted failure injection |
+| `GET` | `/api/scheduler` | Scheduler state, jobs, next runs, and events |
+| `POST` | `/api/scheduler/tick` | Operator/test tick; optional ISO `now` |
+| `GET/POST` | `/api/reports`, `/api/reports/generate` | Schedules, artifacts, and manual generation |
+| `GET` | `/api/reports/download/{file}` | Download an indexed artifact |
+| `GET/POST` | `/api/alerts`, `/api/alerts/evaluate` | Lifecycle queue and rule evaluation |
+| `POST` | `/api/alerts/{id}/transition` | Advance exactly one lifecycle state |
+| `POST` | `/api/alerts/mutes` | Create a timed source/severity mute |
+| `POST` | `/api/alerts/mutes/{id}/toggle` | Enable or disable a mute |
+| `GET/POST` | `/api/intelligence`, `/api/intelligence/refresh` | Provider status and deterministic intelligence |
+
+## Upgrade behavior
+
+Opening a v1.0 database applies additive migrations. Existing records are preserved. Known v1.0 seeded workflow runs are marked `legacy_seed` and excluded from observed success/time metrics, while the four seeded step definitions receive their v1.1 action, retry, and estimate metadata. A fresh `--reset` contains no fabricated workflow-run history.
 
 ## Repository map
 
 ```text
-app/
-  dashboard.py      KPI, connector, and alert query services
-  db.py             schema plus deterministic retail seed
-  engine.py         workflow execution and alert evaluation
-  intelligence.py   offline AI adapter, anomalies, forecasts, triage
-  reports.py        report schedules and HTML/CSV renderer
-static/              six-screen web command center
-tests/               domain and persistence tests
-scripts/             live API verifier and browser capture
-examples/            release screenshots and generated report samples
-server.py            standard-library HTTP/API entry point
+app/actions.py       executable SQLite workflow actions
+app/alerts.py        lifecycle, mutes, delivery, escalation
+app/db.py            schema, v1 migration, deterministic seed
+app/engine.py        savepoint execution, retries, builder persistence
+app/intelligence.py  hosted provider boundary + offline intelligence
+app/reports.py       HTML/CSV renderer and observed schedule metrics
+app/scheduler.py     cron parser, background dispatcher, next-run payload
+static/              seven-screen no-framework command center
+tests/               56 unit, persistence, scheduler, provider, and HTTP tests
+scripts/             live verifier, browser audit, screenshot capture
+examples/            live UI captures and generated report examples
+server.py            standard-library HTTP entry point
 ```
 
-## Quality and release evidence
-
-- Seven automated tests cover every required system domain, KPI drill-down, workflow success/failure paths, deterministic AI, real report files, alert deduplication/deliveries, and run history.
-- The live verifier drives the running HTTP server and mutates the real SQLite database.
-- Three documented visual/report iteration passes are recorded in [QUALITY_LOG.md](QUALITY_LOG.md).
-- Dependency audit: zero high-severity vulnerabilities at release capture.
-- Release details are in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+Release evidence and the three detailed running-app passes are recorded in [QUALITY_LOG.md](QUALITY_LOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## License
 
