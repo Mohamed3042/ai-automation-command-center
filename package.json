@@ -1,0 +1,12 @@
+{
+  "name": "relayops-capture-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser verification and screenshot tooling for RelayOps",
+  "scripts": {
+    "screenshots": "node scripts/capture_screenshots.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "24.16.0"
+  }
+}

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101322">
+  <title>RelayOps — AI Automation Command Center</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div><strong>RelayOps</strong><small>Command Center</small></div>
+      </div>
+
+      <div class="workspace-card">
+        <div class="workspace-avatar">NR</div>
+        <div><span>Workspace</span><strong>Northstar Retail</strong></div>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
+      </div>
+
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <span class="nav-label">Operate</span>
+        <button class="nav-item active" data-view="overview">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+          <span>Overview</span>
+        </button>
+        <button class="nav-item" data-view="integrations">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.5 11 16.6 6M7.5 13l9.1 4.9"/></svg>
+          <span>Integrations</span><b id="nav-connector-count">6</b>
+        </button>
+        <button class="nav-item" data-view="automations">
+          <svg viewBox="0 0 24 24"><path d="M13 2 4.5 13H11l-1 9 9-12h-7l1-8Z"/></svg>
+          <span>Automations</span>
+        </button>
+        <button class="nav-item" data-view="intelligence">
+          <svg viewBox="0 0 24 24"><path d="M9.5 4.5A3.5 3.5 0 0 0 6 8v1a3 3 0 0 0-2 2.8A3.2 3.2 0 0 0 7.2 15H8v1.5A3.5 3.5 0 0 0 11.5 20V4.5h-2ZM14.5 4.5A3.5 3.5 0 0 1 18 8v1a3 3 0 0 1 2 2.8 3.2 3.2 0 0 1-3.2 3.2H16v1.5a3.5 3.5 0 0 1-3.5 3.5V4.5h2Z"/></svg>
+          <span>AI Intelligence</span><i>AI</i>
+        </button>
+        <span class="nav-label second">Measure & respond</span>
+        <button class="nav-item" data-view="reports">
+          <svg viewBox="0 0 24 24"><path d="M6 2h9l4 4v16H6z"/><path d="M14 2v5h5M9 12h7M9 16h7"/></svg>
+          <span>Reports</span>
+        </button>
+        <button class="nav-item" data-view="alerts">
+          <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></svg>
+          <span>Alerts</span><b class="danger" id="nav-alert-count">4</b>
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="offline-mode"><span class="pulse-dot"></span><div><strong>Offline AI active</strong><small>Zero external keys</small></div></div>
+        <div class="operator"><div class="operator-avatar">OC</div><div><strong>Ops Console</strong><small>Platform operator</small></div><button aria-label="Operator menu">•••</button></div>
+      </div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="topbar">
+        <div class="page-heading"><span id="eyebrow">Operations pulse</span><h1 id="page-title">Executive overview</h1></div>
+        <div class="topbar-actions">
+          <div class="live-badge"><span></span>Live · 18s</div>
+          <button class="icon-button" aria-label="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
+          <button class="icon-button notification-button" data-view="alerts" aria-label="Notifications"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h12"/><path d="M10 21h4"/></svg><span></span></button>
+          <div class="date-chip">02 Aug 2026</div>
+        </div>
+      </header>
+      <section id="view" class="view" aria-live="polite"><div class="initial-loader"><span></span><p>Loading operating picture…</p></div></section>
+    </main>
+  </div>
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
