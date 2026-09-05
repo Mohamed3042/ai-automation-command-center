@@ -4,7 +4,7 @@
 ![SQLite](https://img.shields.io/badge/data-SQLite-0f80cc?logo=sqlite&logoColor=white)
 ![AI fallback](https://img.shields.io/badge/AI-offline%20fallback-16a36a)
 ![Tests](https://img.shields.io/badge/tests-56%20passing-16a36a)
-![Release](https://img.shields.io/badge/release-v1.1.0-5b4ce8)
+![Release](https://img.shields.io/badge/release-v1.2.0-5b4ce8)
 
 RelayOps is a self-contained retail operations control plane. Version 1.1 executes its workflows against SQLite, measures real runtimes and row counts, dispatches cron jobs from a background scheduler, lets operators build workflows in the UI, and tracks alerts from acknowledgement through resolution.
 

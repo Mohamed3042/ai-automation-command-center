@@ -1,0 +1,5 @@
+# Development and CI tooling only. The RelayOps runtime (app/ and server.py) still
+# imports nothing outside the standard library, and tests/test_runtime_boundary.py
+# fails the build if that ever stops being true.
+openapi-spec-validator==0.7.2
+PyYAML==6.0.2

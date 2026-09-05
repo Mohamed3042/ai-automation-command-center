@@ -1,0 +1,89 @@
+name: relayops
+
+# RelayOps beside a real n8n instance. `docker compose up --build` gives you the
+# command center on :4173 and n8n on :5678; the three workflows in
+# integrations/n8n/ are imported with the three commands in that folder's README.
+#
+# `docker compose --profile receiver up` additionally starts a tiny signed-webhook
+# receiver on :4999 so outbound delivery, retry and dead-letter can be watched.
+
+services:
+  relayops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${RELAYOPS_IMAGE:-relayops:local}
+    container_name: relayops
+    restart: unless-stopped
+    ports:
+      # Override the host port if something already holds 4173 (RELAYOPS_HOST_PORT=18173 ...).
+      - "${RELAYOPS_HOST_PORT:-4173}:4173"
+    environment:
+      RELAYOPS_DB: /data/command_center.db
+      RELAYOPS_LOG_FORMAT: ${RELAYOPS_LOG_FORMAT:-json}
+      RELAYOPS_PUBLIC_URL: ${RELAYOPS_PUBLIC_URL:-http://localhost:4173}
+      RELAYOPS_WEBHOOK_SECRET: ${RELAYOPS_WEBHOOK_SECRET:-}
+      RELAYOPS_WEBHOOK_BACKOFF_SECONDS: ${RELAYOPS_WEBHOOK_BACKOFF_SECONDS:-5}
+      RELAYOPS_BOOTSTRAP_API_KEY: ${RELAYOPS_BOOTSTRAP_API_KEY:-}
+      RELAYOPS_BOOTSTRAP_API_KEY_NAME: ${RELAYOPS_BOOTSTRAP_API_KEY_NAME:-n8n}
+      RELAYOPS_BOOTSTRAP_API_KEY_SCOPES: ${RELAYOPS_BOOTSTRAP_API_KEY_SCOPES:-*}
+      RELAYOPS_BOOTSTRAP_SUBSCRIPTION_NAME: n8n-alert-escalation
+      RELAYOPS_BOOTSTRAP_SUBSCRIPTION_URL: ${RELAYOPS_BOOTSTRAP_SUBSCRIPTION_URL:-http://n8n:5678/webhook/relayops-alert}
+      RELAYOPS_BOOTSTRAP_SUBSCRIPTION_SECRET: ${RELAYOPS_BOOTSTRAP_SUBSCRIPTION_SECRET:-}
+      RELAYOPS_BOOTSTRAP_SUBSCRIPTION_EVENTS: ${RELAYOPS_BOOTSTRAP_SUBSCRIPTION_EVENTS:-alert.*}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - relayops-data:/data
+      - relayops-reports:/app/data/reports
+
+  n8n:
+    image: n8nio/n8n:2.37.10
+    container_name: relayops-n8n
+    restart: unless-stopped
+    depends_on:
+      relayops:
+        condition: service_healthy
+    ports:
+      - "${N8N_HOST_PORT:-5678}:5678"
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: UTC
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-relayops-local-development-encryption-key}
+      N8N_SECURE_COOKIE: "false"
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # Read by the imported workflows through their expressions.
+      RELAYOPS_BASE_URL: ${RELAYOPS_BASE_URL:-http://relayops:4173}
+      RELAYOPS_API_KEY: ${RELAYOPS_BOOTSTRAP_API_KEY:-}
+      RELAYOPS_WEBHOOK_SECRET: ${RELAYOPS_WEBHOOK_SECRET_ORDERS:-whsec_relayops_dev_orders}
+      RELAYOPS_REPORT_DIR: /reports
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./integrations/n8n:/workflows:ro
+      - n8n-reports:/reports
+
+  receiver:
+    profiles:
+      - receiver
+    image: python:3.12.7-slim
+    container_name: relayops-receiver
+    command: ["python", "/srv/receiver.py"]
+    ports:
+      - "${RECEIVER_HOST_PORT:-4999}:4999"
+    environment:
+      RECEIVER_PORT: "4999"
+      RECEIVER_SECRET: ${RECEIVER_SECRET:-whsec_demo_receiver}
+      RECEIVER_FAIL_FIRST: ${RECEIVER_FAIL_FIRST:-0}
+    volumes:
+      - ./integrations/receiver:/srv:ro
+
+volumes:
+  relayops-data:
+  relayops-reports:
+  n8n-data:
+  n8n-reports:

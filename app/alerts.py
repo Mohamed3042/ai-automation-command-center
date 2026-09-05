@@ -4,6 +4,7 @@ import fnmatch
 from datetime import datetime, timedelta, timezone
 
 from .db import rows_as_dicts
+from .events import emit_event
 
 
 VALID_TRANSITIONS = {
@@ -25,6 +26,17 @@ def parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def alert_event_payload(connection, alert_id: int) -> dict:
+    """The alert as an outbound event body: the row plus its full timeline."""
+    row = connection.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+    if not row:
+        return {"alert": {"id": alert_id}, "timeline": []}
+    return {
+        "alert": dict(row),
+        "timeline": rows_as_dicts(connection.execute("SELECT * FROM alert_timeline WHERE alert_id=? ORDER BY id", (alert_id,)).fetchall()),
+    }
 
 
 def add_timeline(connection, alert_id: int, event_type: str, actor: str, detail: str, created_at: datetime | None = None, from_status: str | None = None, to_status: str | None = None) -> int:
@@ -87,6 +99,7 @@ def create_alert(connection, dedupe_key: str, title: str, message: str, severity
     else:
         deliveries = deliver_alert(connection, alert_id, severity, "Initial alert delivery recorded", moment)
         add_timeline(connection, alert_id, "delivery", "Alert engine", f"Recorded {deliveries} initial delivery receipt(s).", moment)
+    emit_event(connection, "alert.created", alert_event_payload(connection, alert_id), alert_id=alert_id, now=moment)
     return {"id": alert_id, "created": True, "muted": bool(mute_rule), "deliveries": deliveries}
 
 
@@ -102,6 +115,7 @@ def transition_alert(connection, alert_id: int, target: str, actor: str = "Ops o
     escalates_at = None if target == "resolved" else alert["escalates_at"]
     connection.execute(f"UPDATE alerts SET status=?, {timestamp_column}=?, escalates_at=? WHERE id=?", (target, iso(moment), escalates_at, alert_id))
     add_timeline(connection, alert_id, "transition", actor, note or f"Alert moved to {target}.", moment, alert["status"], target)
+    emit_event(connection, "alert.transitioned", dict(alert_event_payload(connection, alert_id), transition={"from": alert["status"], "to": target, "actor": actor}), alert_id=alert_id, now=moment)
     connection.commit()
     return {"alert_id": alert_id, "from": alert["status"], "status": target, "at": iso(moment)}
 
@@ -148,6 +162,7 @@ def enforce_escalations(connection, now: datetime | None = None) -> dict:
         next_minutes = 15 if alert["severity"] == "critical" else 30 if alert["severity"] == "high" else 60
         connection.execute("UPDATE alerts SET escalation_level=?, escalates_at=?, muted_until=NULL WHERE id=?", (level, iso(moment + timedelta(minutes=next_minutes)), alert["id"]))
         add_timeline(connection, alert["id"], "escalated", "Scheduler", f"Escalation level {level}; {sent} delivery receipt(s) recorded.", moment)
+        emit_event(connection, "alert.escalated", dict(alert_event_payload(connection, alert["id"]), escalation={"level": level, "deliveries": sent}), alert_id=alert["id"], now=moment)
         escalated += 1
         deliveries += sent
     connection.commit()

@@ -64,7 +64,7 @@ alerts = request("/api/alerts")
 scheduler = request("/api/scheduler")
 reports = request("/api/reports")
 
-assert health["status"] == "ok" and health["version"] == "1.1.0"
+assert health["status"] == "ok" and health["version"] == "1.2.0"
 assert health["scheduler"] == "running"
 assert connectors["metrics"]["connected"] == 6
 assert len(dashboard["timeline"]) == 7

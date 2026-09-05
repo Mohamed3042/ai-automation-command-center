@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RelayOps API v1 — reference</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <style>
+    body { margin: 0; font-family: Inter, "Segoe UI", Arial, sans-serif; background: #f6f8fb; }
+    .doc-bar { display: flex; align-items: center; gap: 14px; padding: 12px 22px; background: #101322; color: #f4f6fb; }
+    .doc-bar strong { font-size: 15px; letter-spacing: .01em; }
+    .doc-bar span { color: #9aa4bb; font-size: 12px; }
+    .doc-bar a { margin-left: auto; color: #b9b1ff; font-size: 12px; text-decoration: none; border: 1px solid #37406a; border-radius: 8px; padding: 6px 12px; }
+    .doc-bar a + a { margin-left: 8px; }
+    .doc-bar a:hover { background: #1b2036; }
+    #redoc { min-height: 60vh; }
+    .doc-fallback { max-width: 720px; margin: 48px auto; padding: 24px; background: #fff; border: 1px solid #dfe5ec; border-radius: 14px; color: #344054; }
+  </style>
+</head>
+<body>
+  <div class="doc-bar">
+    <strong>RelayOps API v1</strong>
+    <span>Bearer <code>relay_&lt;id&gt;_&lt;secret&gt;</code> · inbound webhooks use HMAC-SHA256</span>
+    <a href="/api/v1/openapi.yaml">openapi.v1.yaml</a>
+    <a href="/">Command center</a>
+  </div>
+  <div id="redoc"><div class="doc-fallback"><strong>Loading the reference…</strong><p>If this message stays, the vendored Redoc bundle is missing from <code>static/vendor/</code>. The document itself is always readable at <a href="/api/v1/openapi.yaml">/api/v1/openapi.yaml</a>.</p></div></div>
+  <script src="/vendor/redoc.standalone.js"></script>
+  <script>
+    if (window.Redoc) {
+      Redoc.init('/api/v1/openapi.yaml', {
+        hideDownloadButton: false,
+        expandResponses: '200,201,202',
+        scrollYOffset: 48,
+        theme: { colors: { primary: { main: '#5b4ce8' } }, typography: { fontFamily: 'Inter, "Segoe UI", Arial, sans-serif' } }
+      }, document.getElementById('redoc'));
+    }
+  </script>
+</body>
+</html>

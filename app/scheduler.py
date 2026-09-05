@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from .alerts import enforce_escalations, iso
 from .db import get_connection, rows_as_dicts
+from .events import deliver_due
 from .engine import run_workflow
 from .reports import generate_report
 
@@ -158,12 +159,13 @@ class RelayScheduler:
                     connection.execute("UPDATE report_schedules SET next_run=? WHERE id=?", (iso(next_cron_run(schedule["cron_expr"], moment)), schedule["id"]))
                     fired.append({"type": "report", "id": schedule["id"], "name": schedule["name"], "status": status})
             escalations = enforce_escalations(connection, moment)
+            deliveries = deliver_due(connection, moment)
             connection.execute(
                 "UPDATE scheduler_state SET status=?,last_tick_at=?,next_tick_at=?,jobs_fired=jobs_fired+?,errors=errors+? WHERE id=1",
                 ("running" if not errors else "degraded", iso(moment), iso(moment + timedelta(seconds=self.tick_seconds)), len(fired), len(errors)),
             )
             connection.commit()
-            return {"at": iso(moment), "fired": fired, "errors": errors, "escalations": escalations}
+            return {"at": iso(moment), "fired": fired, "errors": errors, "escalations": escalations, "deliveries": deliveries}
         finally:
             connection.close()
 
