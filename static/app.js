@@ -6,6 +6,7 @@ const state = {
   builderWorkflow: 1,
   builderDraft: null,
   selectedAlert: null,
+  selectedReceipt: null,
 };
 
 const pageMeta = {
@@ -16,6 +17,7 @@ const pageMeta = {
   intelligence: ['Decision layer', 'AI intelligence'],
   reports: ['Scheduled outputs', 'Reports & distribution'],
   alerts: ['Response center', 'Alerts & escalation'],
+  webhooks: ['Integration edge', 'Webhooks & delivery'],
 };
 
 const colors = ['#5b4ce8', '#0d9f88', '#2386dc', '#e99a12', '#e14c7b', '#8995a5', '#8355c7'];
@@ -53,6 +55,7 @@ function icon(name) {
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
     download: '<path d="M12 3v12m-4-4 4 4 4-4M5 21h14"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
+    webhook: '<path d="M12 3a4 4 0 0 0-3.4 6.1L6 14M12 3a4 4 0 0 1 3.4 6.1L18 14M6 14a4 4 0 1 0 3.4 6M18 14a4 4 0 1 1-3.4 6M9.4 20h5.2"/>',
   };
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.check}</svg>`;
 }
@@ -242,7 +245,57 @@ async function renderAlerts() {
     </div></section>`;
 }
 
-const renderers = {overview:renderOverview, integrations:renderIntegrations, automations:renderAutomations, builder:renderBuilder, intelligence:renderIntelligence, reports:renderReports, alerts:renderAlerts};
+
+function deliveryPill(status) {
+  const label = {pending: 'queued', retrying: 'retrying', delivered: 'delivered', dead_letter: 'dead letter'}[status] || status;
+  return `<span class="status-pill ${safe(status.replaceAll('_', '-'))}">${safe(label)}</span>`;
+}
+
+async function renderWebhooks() {
+  const data = await api('/api/webhooks');
+  const metrics = data.metrics;
+  document.getElementById('nav-webhook-count').textContent = metrics.receipts_total;
+  const selected = data.receipts.find(item => item.id === state.selectedReceipt) || data.receipts[0];
+  if (selected) state.selectedReceipt = selected.id;
+  const ribbon = [
+    ['Inbound receipts', number(metrics.receipts_total), `${metrics.processed} processed · ${metrics.replays} replays refused`],
+    ['Outbound events', number(metrics.deliveries_total), `${metrics.delivered} delivered · ${metrics.dead_letter} dead-lettered`],
+    ['Subscriptions', number(metrics.active_subscriptions), 'Active signed endpoints'],
+    ['Slack connector', data.slack.configured ? 'Live' : 'Fixture', data.slack.mode],
+  ];
+  const sourceRows = data.sources.map(source => `<div class="mute-list"><div><span>${safe(source.name)}</span><strong>POST ${safe(source.path)}</strong><span class="webhook-hint">tolerance ${source.tolerance_seconds}s · secret from ${safe(source.secret_source)}</span></div></div>`).join('');
+  return `${viewToolbar('Signed traffic in and out of RelayOps', 'HMAC-SHA256 both ways: idempotent inbound receipts, an outbound outbox with retries, dead-letters and receipts in the alert timeline', `<a class="button" href="/api/v1/docs">${icon('link')} API reference</a>`)}
+    <section class="metric-ribbon">${ribbon.map(item => `<div class="ribbon-stat"><span>${item[0]}</span><strong>${item[1]}</strong><small>${item[2]}</small></div>`).join('')}</section>
+    <section class="alert-layout">
+      <article class="card table-wrap"><header class="card-header"><div class="card-title"><h3>Inbound receipts</h3><p>Click a receipt to inspect what it created</p></div><span class="status-pill healthy">Signature enforced</span></header>
+        <table class="data-table"><thead><tr><th>Received</th><th>Source</th><th>External id</th><th>Status</th><th class="numeric">Run</th></tr></thead><tbody>${data.receipts.map(receipt => `<tr class="selectable ${receipt.id === selected?.id ? 'selected' : ''}" data-receipt-select="${receipt.id}"><td>${relativeTime(receipt.received_at)}</td><td>${badge(receipt.source_slug)}</td><td><strong>${safe(receipt.external_id || '—')}</strong>${receipt.replays ? `<br><span class="webhook-hint">${receipt.replays} replay(s) refused</span>` : ''}</td><td>${statusPill(receipt.status)}</td><td class="numeric">${receipt.run_id ? `#${receipt.run_id}` : '—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty-state">No inbound webhook has arrived yet. Send one with the curl in the README.</div></td></tr>'}</tbody></table>
+      </article>
+      <article class="card"><header class="card-header"><div class="card-title"><h3>${selected ? safe(selected.external_id || selected.receipt_id) : 'Receipt detail'}</h3><p>What the delivery created inside RelayOps</p></div>${selected ? statusPill(selected.status) : ''}</header>
+        ${selected ? `<div class="timeline-list"><div class="timeline-item"><i></i><div><strong>Receipt</strong><p>${safe(selected.receipt_id)}</p><time>${safe(selected.source_slug)} · ${new Date(selected.received_at).toLocaleString()}</time></div></div>
+        <div class="timeline-item"><i></i><div><strong>Idempotency key</strong><p>${safe(selected.idempotency_key)}</p><time>${selected.replays} replay(s) returned this same receipt</time></div></div>
+        <div class="timeline-item"><i></i><div><strong>Automation</strong><p>${selected.workflow_name ? `${safe(selected.workflow_name)} · run #${selected.run_id}` : 'No run recorded'}</p><time>${safe(selected.detail || 'Processed on arrival')}</time></div></div>
+        <div class="timeline-item"><i></i><div><strong>Payload digest</strong><p class="webhook-digest">${safe(selected.payload_sha256)}</p><time>SHA-256 of the exact signed bytes</time></div></div></div>
+        <div class="webhook-actions"><button class="button subtle" data-view="automations">Open the run list</button></div>` : '<div class="empty-state">Select a receipt to see its detail.</div>'}
+      </article>
+    </section>
+    <section class="alert-layout">
+      <article class="card table-wrap"><header class="card-header"><div class="card-title"><h3>Outbound deliveries</h3><p>Signed events, their attempts, and what to retry</p></div><span class="badge">${metrics.deliveries_total} events</span></header>
+        <table class="data-table"><thead><tr><th>Event</th><th>Subscription</th><th>Status</th><th class="numeric">Attempts</th><th class="numeric">Action</th></tr></thead><tbody>${data.deliveries.map(item => `<tr><td><strong>${safe(item.event_type)}</strong><br><span class="webhook-hint">${safe(item.event_id)}</span></td><td>${safe(item.subscription)}<br><span class="webhook-hint">${safe(item.url)}</span></td><td>${deliveryPill(item.status)}${item.last_error ? `<br><span class="webhook-hint">${safe(String(item.last_error).slice(0, 60))}</span>` : ''}</td><td class="numeric">${item.attempts}/${item.max_attempts}</td><td class="numeric">${item.status === 'delivered' ? '<span class="webhook-hint">—</span>' : `<button class="button subtle" data-retry-delivery="${item.id}">${icon('refresh')} Retry now</button>`}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty-state">No outbound event yet. Add a subscription, then run a workflow or evaluate the alert rules.</div></td></tr>'}</tbody></table>
+      </article>
+      <div>
+        <article class="card"><header class="card-header"><div class="card-title"><h3>Subscriptions</h3><p>Where signed events are sent</p></div></header>
+          <form class="mute-form" id="subscription-form"><input id="subscription-name" placeholder="Name" required><input id="subscription-url" placeholder="https://receiver.example/hook" required><input id="subscription-filter" value="alert.*" placeholder="Event filter"><button class="button" type="submit">Add subscription</button></form>
+          <div class="mute-list">${data.subscriptions.map(item => `<div><span>${safe(item.name)} · ${safe(item.event_filter)}</span><strong>${item.delivered} delivered · ${item.dead_letter} dead-lettered</strong><button class="link-action" data-toggle-subscription="${item.id}" data-active="${item.active ? 0 : 1}">${item.active ? 'Disable' : 'Enable'}</button></div>`).join('') || '<p>No subscription configured.</p>'}</div>
+        </article>
+        <article class="card" style="margin-top:15px"><header class="card-header"><div class="card-title"><h3>Inbound endpoints</h3><p>Signed with HMAC-SHA256 · replay window enforced</p></div></header>${sourceRows}</article>
+        <article class="card" style="margin-top:15px"><header class="card-header"><div class="card-title"><h3>Slack connector</h3><p>${safe(data.slack.mode)}</p></div><span class="status-pill ${data.slack.configured ? 'healthy' : 'paused'}">${data.slack.configured ? 'live' : 'fixture'}</span></header>
+          <div class="mute-list">${data.connector_messages.map(item => `<div><span>${safe(item.event_type)}${item.alert_id ? ` · alert #${item.alert_id}` : ''}</span><strong>${safe(item.mode)} · ${safe(item.status)}</strong><span class="webhook-hint">${relativeTime(item.created_at)}</span></div>`).join('') || `<p>${data.slack.configured ? 'No Slack message sent yet.' : 'No message recorded yet. Without SLACK_WEBHOOK_URL every payload is stored as a labelled fixture receipt.'}</p>`}</div>
+        </article>
+      </div>
+    </section>`;
+}
+
+const renderers = {overview:renderOverview, integrations:renderIntegrations, automations:renderAutomations, builder:renderBuilder, intelligence:renderIntelligence, reports:renderReports, alerts:renderAlerts, webhooks:renderWebhooks};
 
 async function render() {
   window.scrollTo(0, 0);
@@ -309,6 +362,8 @@ function bindControls() {
   if (builderNew) builderNew.onclick = () => { state.builderWorkflow = 'new'; state.builderDraft = newWorkflowDraft(); render(); };
   const builderSave = document.getElementById('builder-save');
   if (builderSave) builderSave.onclick = () => buttonTask(builderSave, async () => { const payload = collectBuilderDraft(); const path = payload.id ? `/api/workflows/${payload.id}` : '/api/workflows'; const saved = await api(path,{method:payload.id?'PUT':'POST',body:JSON.stringify(payload)}); state.builderWorkflow=saved.id; state.builderDraft=null; state.selectedWorkflow=saved.id; toast('Workflow saved',`${saved.steps.length} executable steps persisted`); await render(); });
+  const subscriptionForm = document.getElementById('subscription-form');
+  if (subscriptionForm) subscriptionForm.onsubmit = async event => { event.preventDefault(); const button=subscriptionForm.querySelector('button'); await buttonTask(button,async()=>{await api('/api/webhooks/subscriptions',{method:'POST',body:JSON.stringify({name:document.getElementById('subscription-name').value,url:document.getElementById('subscription-url').value,event_filter:document.getElementById('subscription-filter').value||'*'})});toast('Subscription added','Matching events will be signed and queued for delivery');await render();}); };
   const muteForm = document.getElementById('mute-form');
   if (muteForm) muteForm.onsubmit = async event => { event.preventDefault(); const button=muteForm.querySelector('button'); await buttonTask(button,async()=>{await api('/api/alerts/mutes',{method:'POST',body:JSON.stringify({source_pattern:document.getElementById('mute-source').value,severity:document.getElementById('mute-severity').value,duration_minutes:Number(document.getElementById('mute-duration').value),reason:document.getElementById('mute-reason').value})});toast('Mute created','Matching deliveries will pause while alerts remain visible');await render();}); };
 }
@@ -340,6 +395,12 @@ document.addEventListener('click', async event => {
   if (alertSelect && !event.target.closest('[data-transition-alert]')) { state.selectedAlert=Number(alertSelect.dataset.alertSelect);await render();return; }
   const transition = event.target.closest('[data-transition-alert]');
   if (transition) { await buttonTask(transition,async()=>{await api(`/api/alerts/${transition.dataset.transitionAlert}/transition`,{method:'POST',body:JSON.stringify({status:transition.dataset.status,note:`Operator moved alert to ${transition.dataset.status}`})});toast('Alert lifecycle advanced',`Status is now ${transition.dataset.status}`);await render();});return; }
+  const receiptSelect = event.target.closest('[data-receipt-select]');
+  if (receiptSelect) { state.selectedReceipt=Number(receiptSelect.dataset.receiptSelect); await render(); return; }
+  const retryDelivery = event.target.closest('[data-retry-delivery]');
+  if (retryDelivery) { await buttonTask(retryDelivery,async()=>{await api(`/api/webhooks/deliveries/${retryDelivery.dataset.retryDelivery}/retry`,{method:'POST',body:'{}'});toast('Delivery requeued','The worker will attempt it on the next scheduler tick');await render();}); return; }
+  const toggleSubscription = event.target.closest('[data-toggle-subscription]');
+  if (toggleSubscription) { await buttonTask(toggleSubscription,async()=>{await api(`/api/webhooks/subscriptions/${toggleSubscription.dataset.toggleSubscription}/toggle`,{method:'POST',body:JSON.stringify({active:toggleSubscription.dataset.active==='1'})});toast('Subscription updated','New events follow the new state');await render();}); return; }
   const toggleMute = event.target.closest('[data-toggle-mute]');
   if (toggleMute) { await buttonTask(toggleMute,async()=>{await api(`/api/alerts/mutes/${toggleMute.dataset.toggleMute}/toggle`,{method:'POST',body:JSON.stringify({active:toggleMute.dataset.active==='1'})});toast('Mute policy updated','Scheduler will apply the new rule state');await render();}); }
 });

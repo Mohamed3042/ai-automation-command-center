@@ -8,3 +8,6 @@ data/*.db-*
 data/reports/*
 !data/reports/.gitkeep
 *.log
+
+# Local Compose overrides (never committed; see .env.example)
+.env

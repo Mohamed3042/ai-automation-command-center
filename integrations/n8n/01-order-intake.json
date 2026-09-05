@@ -1,0 +1,172 @@
+{
+  "updatedAt": "2026-09-05T19:13:12.000Z",
+  "createdAt": "2026-09-05T19:05:46.040Z",
+  "id": "relayops-order-intake",
+  "name": "RelayOps - order intake",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "relayops-order",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9d3eb4330b7a4d27",
+      "name": "Storefront order webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        0
+      ],
+      "webhookId": "33fc57ba-a350-4554-9c69-42142377095e"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Map the storefront payload onto the RelayOps canonical order and sign it.\n// The signature covers the EXACT bytes the HTTP node sends, so the body string\n// built here is the body posted downstream - never a re-serialised object.\nconst crypto = require('crypto');\n\nconst secret = $env.RELAYOPS_WEBHOOK_SECRET;\nif (!secret) {\n  throw new Error('RELAYOPS_WEBHOOK_SECRET is not set on the n8n container');\n}\n\nconst incoming = $input.first().json;\nconst order = incoming.body ?? incoming;\n\nconst payload = {\n  order_id: String(order.order_id ?? order.id ?? order.order_number ?? ''),\n  store: order.store ?? order.store_name ?? (order.location && order.location.name) ?? '',\n  amount: Number(order.amount ?? order.total_price ?? order.total ?? 0),\n  currency: order.currency ?? 'USD',\n  status: order.status ?? order.financial_status ?? 'paid',\n  created_at: order.created_at ?? order.processed_at ?? new Date().toISOString(),\n  channel: 'n8n-order-intake',\n};\n\nconst body = JSON.stringify(payload);\nconst timestamp = Math.floor(Date.now() / 1000);\nconst digest = crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\n\nreturn [{\n  json: {\n    body: body,\n    order_id: payload.order_id,\n    signature: 't=' + timestamp + ',v1=' + digest,\n    idempotency_key: 'n8n-order-' + payload.order_id,\n  },\n}];\n"
+      },
+      "id": "936d5dab072b4e8f",
+      "name": "Map and sign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RELAYOPS_BASE_URL }}/api/v1/webhooks/orders",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-RelayOps-Signature",
+              "value": "={{ $json.signature }}"
+            },
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.idempotency_key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "id": "ee6ec45a8ca9494e",
+      "name": "POST /api/v1/webhooks/orders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "6c14eb7828ca4d47",
+      "name": "Respond with the RelayOps receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        400,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Storefront order webhook": {
+      "main": [
+        [
+          {
+            "node": "Map and sign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map and sign": {
+      "main": [
+        [
+          {
+            "node": "POST /api/v1/webhooks/orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /api/v1/webhooks/orders": {
+      "main": [
+        [
+          {
+            "node": "Respond with the RelayOps receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "2ffcb88c-3413-4047-9bdc-9cb6b8a542ae",
+  "activeVersionId": "2ffcb88c-3413-4047-9bdc-9cb6b8a542ae",
+  "versionCounter": 1,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-09-05T19:05:46.044Z",
+      "createdAt": "2026-09-05T19:05:46.044Z",
+      "role": "workflow:owner",
+      "workflowId": "relayops-order-intake",
+      "projectId": "cKEDWVBg7MIXJlmN",
+      "project": {
+        "updatedAt": "2026-09-05T19:02:45.939Z",
+        "createdAt": "2026-09-05T19:02:45.939Z",
+        "id": "cKEDWVBg7MIXJlmN",
+        "name": "Unnamed Project",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "75db09ca-6f96-4ab2-a0c5-177d461bf1f4"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

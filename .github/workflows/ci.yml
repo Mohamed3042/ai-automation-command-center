@@ -11,6 +11,7 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.9", "3.12"]
     steps:
@@ -18,7 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m py_compile server.py app/*.py scripts/verify_live.py
+      - run: python -m py_compile server.py app/*.py app/api/*.py app/connectors/*.py scripts/verify_live.py scripts/n8n_e2e.py
+      # No pip install: the runtime and its tests are standard library only, and
+      # tests/test_runtime_boundary.py fails the build if that stops being true.
       - run: python -m unittest discover -s tests -v
       - name: Verify the live HTTP boundary
         shell: bash
@@ -40,3 +43,144 @@ jobs:
               raise SystemExit("RelayOps did not become ready")
           PY
           python scripts/verify_live.py
+      - name: Upload the server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relayops-server-log-${{ matrix.python-version }}
+          path: relayops-ci.log
+          if-no-files-found: ignore
+
+  spec-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes=false -r requirements-dev.txt
+      # With PyYAML and openapi-spec-validator present, the contract tests also
+      # check the standard-library YAML reader against PyYAML and validate the
+      # document against the OpenAPI 3.1 schema.
+      - run: python -m unittest tests.test_openapi_contract -v
+      - name: Confirm the tooling was actually exercised
+        run: |
+          python -m unittest tests.test_openapi_contract -v 2>&1 | tee spec.log
+          if grep -q "skipped" spec.log; then echo "spec tooling was skipped; the job is decoration"; exit 1; fi
+
+  docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: relayops:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke the container
+        run: |
+          docker run -d --name relayops-ci -p 4173:4173 \
+            -e RELAYOPS_BOOTSTRAP_API_KEY=relay_ci000000_${{ github.run_id }}0000000000000000 \
+            relayops:ci
+          for _ in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' relayops-ci)
+            [ "$state" = "healthy" ] && break
+            sleep 2
+          done
+          docker inspect --format 'health={{.State.Health.Status}}' relayops-ci | grep healthy
+          test "$(docker exec relayops-ci id -u)" != "0"
+          curl -fsS http://localhost:4173/api/v1/health | grep '"status":"ok"'
+          curl -fsS http://localhost:4173/metrics | grep relayops_process_uptime_seconds
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4173/api/v1/workflows)" = "401"
+          curl -fsS -H "Authorization: Bearer relay_ci000000_${{ github.run_id }}0000000000000000" \
+            "http://localhost:4173/api/v1/workflows?limit=1" | grep '"pagination"'
+      - name: Container logs
+        if: always()
+        run: docker logs relayops-ci || true
+
+  n8n-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose environment
+        run: |
+          {
+            echo "RELAYOPS_BOOTSTRAP_API_KEY=relay_ci000001_$(openssl rand -hex 24)"
+            echo "RELAYOPS_WEBHOOK_SECRET_ORDERS=whsec_ci_$(openssl rand -hex 16)"
+            echo "RELAYOPS_WEBHOOK_BACKOFF_SECONDS=2"
+            echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 24)"
+          } > .env
+          # The signing secret is one value on both sides of the wire.
+          echo "RELAYOPS_WEBHOOK_SECRET=$(grep RELAYOPS_WEBHOOK_SECRET_ORDERS .env | cut -d= -f2)" >> .env
+      - name: Start RelayOps and n8n
+        run: docker compose up -d --build
+      - name: Import and activate the three workflows
+        run: |
+          docker compose exec -T n8n n8n import:workflow --separate --input=/workflows
+          docker compose exec -T n8n n8n update:workflow --id=relayops-order-intake --active=true
+          docker compose exec -T n8n n8n update:workflow --id=relayops-alert-escalation --active=true
+          docker compose restart n8n
+          for _ in $(seq 1 60); do
+            curl -fsS http://localhost:5678/healthz >/dev/null 2>&1 && break
+            sleep 2
+          done
+      - name: Fire a real order through n8n and assert it landed
+        run: |
+          set -a && . ./.env && set +a
+          python3 scripts/n8n_e2e.py --relayops http://localhost:4173 --n8n http://localhost:5678 --api-key "$RELAYOPS_BOOTSTRAP_API_KEY"
+      - name: Run the nightly report workflow and assert the artifact was written
+        run: |
+          docker compose exec -T -e N8N_RUNNERS_ENABLED=false -e N8N_RUNNERS_BROKER_PORT=5699 n8n n8n execute --id=relayops-nightly-report
+          docker compose exec -T n8n ls -la /reports
+          docker compose exec -T n8n sh -c 'ls /reports/*.html' | grep -q html
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p n8n-e2e-logs
+          docker compose logs --no-color relayops > n8n-e2e-logs/relayops.log 2>&1 || true
+          docker compose logs --no-color n8n > n8n-e2e-logs/n8n.log 2>&1 || true
+          docker compose exec -T n8n sh -c 'ls -la /reports' > n8n-e2e-logs/reports.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: n8n-e2e-logs
+          path: n8n-e2e-logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  publish-image:
+    needs: [unit-tests, spec-tools, docker-image, n8n-e2e]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/mohamed3042/ai-automation-command-center
+          tags: |
+            type=sha
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

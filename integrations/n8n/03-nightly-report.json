@@ -1,0 +1,224 @@
+{
+  "updatedAt": "2026-09-05T19:05:46.052Z",
+  "createdAt": "2026-09-05T19:05:46.052Z",
+  "id": "relayops-nightly-report",
+  "name": "RelayOps - nightly report",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "282bfa052c6648ce",
+      "name": "Every night at 02:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -280,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b81a65a44921416d",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RELAYOPS_BASE_URL }}/api/v1/reports/generate",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RELAYOPS_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ report_type: \"daily\" }) }}"
+      },
+      "id": "9eab86b1de2c4088",
+      "name": "POST /api/v1/reports/generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -40,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// The generate call returns one HTML and one CSV artifact; keep the HTML one.\nconst artifacts = $input.first().json.artifacts ?? [];\nconst html = artifacts.find((item) => item.format === 'HTML') ?? artifacts[0];\nif (!html) {\n  throw new Error('RelayOps returned no report artifact');\n}\nreturn [{ json: { report_id: html.id, filename: html.path, row_count: html.row_count } }];\n"
+      },
+      "id": "6044ec4cc9904b15",
+      "name": "Pick the HTML artifact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.RELAYOPS_BASE_URL }}/api/v1/reports/{{ $json.report_id }}/download",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RELAYOPS_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "6a696ab2eae7465c",
+      "name": "GET /api/v1/reports/{id}/download",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        430,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $env.RELAYOPS_REPORT_DIR }}/{{ $('Pick the HTML artifact').item.json.filename }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "id": "b22ff8b7c56b4634",
+      "name": "Write it to the mounted folder",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every night at 02:00 UTC": {
+      "main": [
+        [
+          {
+            "node": "POST /api/v1/reports/generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /api/v1/reports/generate": {
+      "main": [
+        [
+          {
+            "node": "Pick the HTML artifact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick the HTML artifact": {
+      "main": [
+        [
+          {
+            "node": "GET /api/v1/reports/{id}/download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /api/v1/reports/{id}/download": {
+      "main": [
+        [
+          {
+            "node": "Write it to the mounted folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "POST /api/v1/reports/generate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "a43627b2-560b-4617-b03b-003eb31e57c8",
+  "activeVersionId": null,
+  "versionCounter": 2,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-09-05T19:05:46.054Z",
+      "createdAt": "2026-09-05T19:05:46.054Z",
+      "role": "workflow:owner",
+      "workflowId": "relayops-nightly-report",
+      "projectId": "cKEDWVBg7MIXJlmN",
+      "project": {
+        "updatedAt": "2026-09-05T19:02:45.939Z",
+        "createdAt": "2026-09-05T19:02:45.939Z",
+        "id": "cKEDWVBg7MIXJlmN",
+        "name": "Unnamed Project",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "75db09ca-6f96-4ab2-a0c5-177d461bf1f4"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

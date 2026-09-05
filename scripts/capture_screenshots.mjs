@@ -6,8 +6,19 @@ import puppeteer from 'puppeteer-core';
 const root = path.resolve(import.meta.dirname, '..');
 const outputDir = path.join(root, 'examples');
 const baseUrl = (process.argv[2] || 'http://127.0.0.1:4173').replace(/\/$/, '');
-const executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const views = ['overview', 'integrations', 'automations', 'builder', 'intelligence', 'reports', 'alerts'];
+const candidates = [
+  process.env.CHROME_PATH,
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+].filter(Boolean);
+const executablePath = candidates.find(candidate => fs.existsSync(candidate));
+if (!executablePath) {
+  throw new Error(`No Chrome found. Set CHROME_PATH. Looked in: ${candidates.join(', ')}`);
+}
+const views = ['overview', 'integrations', 'automations', 'builder', 'intelligence', 'reports', 'alerts', 'webhooks'];
 
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await puppeteer.launch({
@@ -29,6 +40,14 @@ try {
     await page.close();
     console.log(`Captured examples/${view}.png`);
   }
+
+  const docsPage = await browser.newPage();
+  await docsPage.setViewport({ width: 1600, height: 1400, deviceScaleFactor: 1 });
+  await docsPage.goto(`${baseUrl}/api/v1/docs`, { waitUntil: 'networkidle0', timeout: 30_000 });
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  await docsPage.screenshot({ path: path.join(outputDir, 'api-docs.png'), fullPage: false });
+  await docsPage.close();
+  console.log('Captured examples/api-docs.png');
 
   const reportDir = path.join(root, 'data', 'reports');
   const weeklyReports = fs.readdirSync(reportDir).filter(name => name.startsWith('weekly-') && name.endsWith('.html')).sort();
