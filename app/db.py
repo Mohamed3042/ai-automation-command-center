@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT / "data" / "command_center.db"
 DEMO_TODAY = date(2026, 8, 2)
+SEED_VERSION = "1.2.0"
 
 
 def get_connection(path: str | Path | None = None) -> sqlite3.Connection:
@@ -330,6 +331,107 @@ CREATE TABLE IF NOT EXISTS scheduler_state (
 """
 
 
+INTEGRATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key_id TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    secret_hash TEXT NOT NULL,
+    iterations INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS webhook_sources (
+    slug TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    tolerance_seconds INTEGER NOT NULL DEFAULT 300,
+    workflow_id INTEGER REFERENCES workflows(id),
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webhook_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_id TEXT UNIQUE NOT NULL,
+    source_slug TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    external_id TEXT,
+    status TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    payload_sha256 TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    run_id INTEGER REFERENCES workflow_runs(id),
+    replays INTEGER NOT NULL DEFAULT 0,
+    response_json TEXT NOT NULL DEFAULT '{}',
+    UNIQUE(source_slug, idempotency_key)
+);
+
+CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    url TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    event_filter TEXT NOT NULL DEFAULT '*',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webhook_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subscription_id INTEGER NOT NULL REFERENCES webhook_subscriptions(id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE CASCADE,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    next_attempt_at TEXT NOT NULL,
+    last_status_code INTEGER,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    UNIQUE(subscription_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS webhook_delivery_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    outbox_id INTEGER NOT NULL REFERENCES webhook_outbox(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    status_code INTEGER,
+    duration_ms REAL NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS connector_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connector_slug TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    alert_id INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    status_code INTEGER,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+"""
+
+
+WEBHOOK_SOURCES = [
+    ("orders", "Storefront order intake", "whsec_relayops_dev_orders", 300, 1),
+    ("tickets", "Helpdesk ticket intake", "whsec_relayops_dev_tickets", 300, 2),
+]
+
+
 CONNECTORS = [
     (1, "square-pos", "Square POS", "Point of sale", "POS", "healthy", "#6558f5", 99.99, "2026-08-02T09:44:31Z", 182, 18420, 0.02, "seeded REST adapter"),
     (2, "shopify", "Shopify Plus", "E-commerce", "Commerce", "healthy", "#14b87a", 99.97, "2026-08-02T09:44:18Z", 226, 6842, 0.05, "seeded webhook adapter"),
@@ -374,13 +476,15 @@ def init_db(path: str | Path | None = None, reset: bool = False) -> sqlite3.Conn
         db_path.unlink()
     connection = get_connection(db_path)
     connection.executescript(SCHEMA)
+    connection.executescript(INTEGRATION_SCHEMA)
     _migrate(connection)
     exists = connection.execute("SELECT value FROM metadata WHERE key='seed_version'").fetchone()
     if not exists:
         _seed(connection)
     else:
-        connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('seed_version', '1.1.0')")
+        connection.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('seed_version', ?)", (SEED_VERSION,))
         connection.commit()
+    _seed_integrations(connection)
     return connection
 
 
@@ -444,6 +548,24 @@ def _migrate(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
+def _seed_integrations(connection: sqlite3.Connection) -> None:
+    """Idempotent integration bootstrap: signing sources and index coverage.
+
+    Runs on every start (fresh or upgraded database) so a v1.1 store gains the
+    v1.2 integration surface without losing a single row.
+    """
+    created = "2026-08-02T09:00:00Z"
+    for slug, name, secret, tolerance, workflow_id in WEBHOOK_SOURCES:
+        connection.execute(
+            "INSERT OR IGNORE INTO webhook_sources(slug,name,secret,tolerance_seconds,workflow_id,active,created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
+            (slug, name, secret, tolerance, workflow_id, created),
+        )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_webhook_receipts_recent ON webhook_receipts(received_at DESC)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due ON webhook_outbox(status,next_attempt_at)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_connector_messages_recent ON connector_messages(created_at DESC)")
+    connection.commit()
+
+
 def _seed(connection: sqlite3.Connection) -> None:
     connection.executemany(
         "INSERT INTO connectors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -465,7 +587,7 @@ def _seed(connection: sqlite3.Connection) -> None:
     connection.executemany(
         "INSERT INTO metadata(key, value) VALUES (?, ?)",
         [
-            ("seed_version", "1.1.0"),
+            ("seed_version", SEED_VERSION),
             ("demo_date", DEMO_TODAY.isoformat()),
             ("business_name", "Northstar Retail Group"),
             ("currency", "USD"),

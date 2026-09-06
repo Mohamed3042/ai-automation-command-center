@@ -5,9 +5,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from . import metrics
 from .actions import ACTION_REGISTRY, execute_action
 from .alerts import create_alert
 from .db import rows_as_dicts
+from .events import emit_event
 
 
 def utcnow() -> datetime:
@@ -163,6 +165,17 @@ def run_workflow(connection, workflow_id: int, trigger_type: str = "manual", fai
         (f"{workflow['name']} {status}", f"Run {run_key} executed {len(steps)} configured actions, processed {total_records} real row result(s), and performed {retry_count} retries in {duration_ms:.3f} ms.", "Scheduler" if trigger_type == "schedule" else "Ops operator", iso(finished)),
     )
     _refresh_workflow_rollup(connection, workflow_id)
+    metrics.increment("relayops_workflow_runs_total", {"trigger": trigger_type, "status": status})
+    emit_event(
+        connection,
+        f"workflow.run.{'succeeded' if status == 'success' else 'failed'}",
+        {
+            "run": {"id": run_id, "run_key": run_key, "status": status, "duration_ms": duration_ms, "records_processed": total_records, "retries": retry_count, "error": terminal_error, "trigger_type": trigger_type},
+            "workflow": {"id": workflow_id, "name": workflow["name"], "owner": workflow["owner"]},
+        },
+        alert_id=(alert or {}).get("id"),
+        now=finished,
+    )
     connection.commit()
     return {"id": run_id, "run_key": run_key, "workflow": workflow["name"], "status": status, "duration_ms": duration_ms, "records_processed": total_records, "retries": retry_count, "error": terminal_error, "alert": alert, "steps": run_steps}
 

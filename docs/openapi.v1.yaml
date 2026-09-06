@@ -1,0 +1,1774 @@
+openapi: 3.1.0
+info:
+  title: RelayOps API
+  version: 1.2.0
+  summary: The machine surface of the RelayOps retail operations control plane.
+  description: |
+    RelayOps runs on the Python standard library and SQLite. This document is
+    hand-authored and is the contract the server is tested against:
+    `tests/test_openapi_contract.py` compares every path and method here with the
+    route table in `app/api/__init__.py` in both directions, so a route without a
+    specification entry — or an entry without a route — fails the build.
+
+    Authentication is a scoped API key minted with
+    `python server.py keys create --name <name> --scopes <scopes>` and sent as
+    `Authorization: Bearer relay_<id>_<secret>`. Inbound webhook endpoints are
+    authenticated by an HMAC-SHA256 signature instead of a key, because the
+    caller is a storefront or helpdesk, not an API client.
+
+    The browser UI keeps using the unauthenticated same-origin `/api/*` surface
+    from v1.1; that surface is not part of this contract.
+  contact:
+    name: Mohamed Mahmoud
+    email: medo433447@gmail.com
+  license:
+    name: MIT
+    url: https://opensource.org/license/mit
+servers:
+  - url: http://127.0.0.1:4173
+    description: Local process started with `python server.py --reset`
+tags:
+  - name: system
+    description: Health, readiness, metrics, and this document.
+  - name: workflows
+    description: Persisted automation definitions and their execution.
+  - name: runs
+    description: Executed runs and their per-step attempts.
+  - name: alerts
+    description: The alert lifecycle and its mute policy.
+  - name: reports
+    description: Report schedules and generated artifacts.
+  - name: scheduler
+    description: Cron dispatcher state and upcoming jobs.
+  - name: connectors
+    description: Connector state and the Slack message surface.
+  - name: webhooks
+    description: Inbound signed intake and outbound signed delivery.
+paths:
+  /api/v1/health:
+    get:
+      tags:
+        - system
+      operationId: getHealth
+      summary: Liveness, version, database, scheduler, and provider state.
+      security: []
+      responses:
+        '200':
+          description: The process is serving and the database answered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+                service: relayops
+                version: 1.2.0
+                database: connected
+                scheduler: running
+        '503':
+          description: The database did not answer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /api/v1/ready:
+    get:
+      tags:
+        - system
+      operationId: getReadiness
+      summary: Readiness for traffic - the store answers and the scheduler thread is alive.
+      security: []
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: Not ready; the failing check is named in the response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+  /metrics:
+    get:
+      tags:
+        - system
+      operationId: getMetrics
+      summary: Prometheus text-format counters and gauges.
+      security: []
+      responses:
+        '200':
+          description: Metric families in the Prometheus exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP relayops_alerts Alerts currently stored, by lifecycle state.
+                # TYPE relayops_alerts gauge
+                relayops_alerts{state="open"} 4
+  /api/v1/openapi.yaml:
+    get:
+      tags:
+        - system
+      operationId: getOpenApiDocument
+      summary: This document, served verbatim from the repository.
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI 3.1 document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /api/v1/docs:
+    get:
+      tags:
+        - system
+      operationId: getApiDocsPage
+      summary: A vendored single-file Redoc page rendering this document.
+      security: []
+      responses:
+        '200':
+          description: An HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
+  /api/v1/workflows:
+    get:
+      tags:
+        - workflows
+      operationId: listWorkflows
+      summary: List persisted workflow definitions with their steps and recent runs.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: active
+          in: query
+          required: false
+          description: Restrict to enabled or paused definitions.
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: A page of workflow definitions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/workflows/{workflow_id}:
+    get:
+      tags:
+        - workflows
+      operationId: getWorkflow
+      summary: One workflow definition.
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      responses:
+        '200':
+          description: The workflow.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/workflows/{workflow_id}/run:
+    post:
+      tags:
+        - workflows
+      operationId: runWorkflow
+      summary: Execute the workflow now and return the measured run.
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                trigger_type:
+                  type: string
+                  description: Recorded against the run; defaults to api.
+                  default: api
+      responses:
+        '201':
+          description: The run, with one entry per executed step attempt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /api/v1/workflows/{workflow_id}/toggle:
+    post:
+      tags:
+        - workflows
+      operationId: toggleWorkflow
+      summary: Enable or pause event and scheduled execution.
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - active
+              properties:
+                active:
+                  type: boolean
+      responses:
+        '200':
+          description: The new state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  active:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/runs:
+    get:
+      tags:
+        - runs
+      operationId: listRuns
+      summary: List executed workflow runs, newest first.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - running
+              - success
+              - failed
+        - name: workflow_id
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: A page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/runs/{run_id}:
+    get:
+      tags:
+        - runs
+      operationId: getRun
+      summary: One run with every persisted attempt.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/runs/{run_id}/attempts:
+    get:
+      tags:
+        - runs
+      operationId: listRunAttempts
+      summary: The per-step attempts of one run, in execution order.
+      parameters:
+        - $ref: '#/components/parameters/RunId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/alerts:
+    get:
+      tags:
+        - alerts
+      operationId: listAlerts
+      summary: The exception queue, severity first, with lifecycle counts.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - open
+              - acknowledged
+              - investigating
+              - resolved
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              - critical
+              - high
+              - medium
+              - low
+      responses:
+        '200':
+          description: A page of alerts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/alerts/{alert_id}:
+    get:
+      tags:
+        - alerts
+      operationId: getAlert
+      summary: One alert with its immutable timeline.
+      parameters:
+        - $ref: '#/components/parameters/AlertId'
+      responses:
+        '200':
+          description: The alert.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/alerts/{alert_id}/transition:
+    post:
+      tags:
+        - alerts
+      operationId: transitionAlert
+      summary: Advance the alert exactly one lifecycle state.
+      description: |
+        The lifecycle is strict: open then acknowledged then investigating then
+        resolved. Any other target is rejected with 422 and the expected next
+        state is named in the message.
+      parameters:
+        - $ref: '#/components/parameters/AlertId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum:
+                    - acknowledged
+                    - investigating
+                    - resolved
+                actor:
+                  type: string
+                note:
+                  type: string
+      responses:
+        '200':
+          description: The recorded transition.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertTransition'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /api/v1/alerts/mutes:
+    post:
+      tags:
+        - alerts
+      operationId: createAlertMute
+      summary: Suppress matching deliveries for a bounded window.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source_pattern:
+                  type: string
+                  default: '*'
+                severity:
+                  type: string
+                  default: '*'
+                duration_minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 10080
+                  default: 60
+                reason:
+                  type: string
+      responses:
+        '201':
+          description: The stored mute rule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MuteRule'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/reports:
+    get:
+      tags:
+        - reports
+      operationId: listReports
+      summary: Generated artifacts, schedules, and observed schedule metrics.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of report artifacts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/reports/generate:
+    post:
+      tags:
+        - reports
+      operationId: generateReport
+      summary: Render a report to HTML and CSV now.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                report_type:
+                  type: string
+                  enum:
+                    - daily
+                    - weekly
+                    - inventory
+                  default: daily
+      responses:
+        '201':
+          description: The two written artifacts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ReportArtifact'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/reports/{report_id}/download:
+    get:
+      tags:
+        - reports
+      operationId: downloadReport
+      summary: Download one indexed artifact by id.
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The artifact bytes.
+          content:
+            text/html:
+              schema:
+                type: string
+            text/csv:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/scheduler:
+    get:
+      tags:
+        - scheduler
+      operationId: getScheduler
+      summary: Dispatcher state, upcoming jobs, and recent scheduler events.
+      responses:
+        '200':
+          description: The scheduler payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scheduler'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/scheduler/jobs:
+    get:
+      tags:
+        - scheduler
+      operationId: listSchedulerJobs
+      summary: Upcoming cron jobs with their next run time.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of jobs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/connectors:
+    get:
+      tags:
+        - connectors
+      operationId: listConnectors
+      summary: Connector contracts, health, and the Slack connector mode.
+      responses:
+        '200':
+          description: Connector state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connectors'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/connectors/messages:
+    get:
+      tags:
+        - connectors
+      operationId: listConnectorMessages
+      summary: Messages emitted by outward connectors, live or fixture.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of connector messages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorMessagePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/connectors/slack/notify:
+    post:
+      tags:
+        - connectors
+      operationId: notifySlack
+      summary: Post one alert to Slack as a Block Kit message.
+      description: |
+        With SLACK_WEBHOOK_URL set the message is POSTed to the Slack incoming
+        webhook. Without it the identical payload is recorded as a fixture
+        receipt and labelled fixture in the UI - the message is real, the
+        transport is not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alert_id:
+                  type: integer
+                  description: Load the alert from the store.
+                alert:
+                  type: object
+                  description: An alert object supplied by the caller, used when alert_id is absent.
+                event_type:
+                  type: string
+                  default: alert.escalated
+      responses:
+        '201':
+          description: The delivery or fixture receipt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorMessage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/webhooks/orders:
+    post:
+      tags:
+        - webhooks
+      operationId: receiveOrderWebhook
+      summary: Accept a storefront order, stage it, and run the order automation.
+      description: |
+        Signed with the orders source secret. The payload is mapped onto the
+        canonical staged order the `webhook.validate` action reads, then workflow
+        1 runs immediately, so the receipt carries a real run id.
+      security:
+        - webhookSignature: []
+      parameters:
+        - $ref: '#/components/parameters/SignatureHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderWebhook'
+            example:
+              id: SF-10041
+              created_at: '2026-08-02T10:14:00Z'
+              currency: USD
+              total_price: '184.50'
+              financial_status: paid
+              location:
+                name: Riverside Flagship
+      responses:
+        '202':
+          description: Accepted. A replay returns the first receipt with duplicate true.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookReceipt'
+        '401':
+          $ref: '#/components/responses/SignatureRejected'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /api/v1/webhooks/tickets:
+    post:
+      tags:
+        - webhooks
+      operationId: receiveTicketWebhook
+      summary: Accept a helpdesk ticket and run the support triage automation.
+      security:
+        - webhookSignature: []
+      parameters:
+        - $ref: '#/components/parameters/SignatureHeader'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketWebhook'
+            example:
+              ticket_id: HD-8841
+              customer: Dana Ellis
+              subject: Charged twice for order 10041
+              body: My card shows two charges for the same order.
+              channel: Email
+      responses:
+        '202':
+          description: Accepted, with the triage run that classified and routed the ticket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookReceipt'
+        '401':
+          $ref: '#/components/responses/SignatureRejected'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+  /api/v1/webhooks/sources:
+    get:
+      tags:
+        - webhooks
+      operationId: listWebhookSources
+      summary: The inbound endpoints, their tolerance window, and where the secret comes from.
+      responses:
+        '200':
+          description: The configured sources.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookSource'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/webhooks/receipts:
+    get:
+      tags:
+        - webhooks
+      operationId: listWebhookReceipts
+      summary: Inbound receipts, newest first.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of receipts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/webhooks/subscriptions:
+    get:
+      tags:
+        - webhooks
+      operationId: listSubscriptions
+      summary: Outbound subscriptions with their queued, delivered, and dead-lettered counts.
+      responses:
+        '200':
+          description: The subscriptions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Subscription'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags:
+        - webhooks
+      operationId: createSubscription
+      summary: Register an endpoint to receive signed RelayOps events.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - url
+              properties:
+                name:
+                  type: string
+                url:
+                  type: string
+                  format: uri
+                secret:
+                  type: string
+                  description: Signing secret. Generated if omitted, and returned once.
+                event_filter:
+                  type: string
+                  description: Space or comma separated fnmatch patterns over event types.
+                  default: '*'
+                active:
+                  type: boolean
+                  default: true
+      responses:
+        '201':
+          description: The stored subscription, including its signing secret.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/webhooks/subscriptions/{subscription_id}/toggle:
+    post:
+      tags:
+        - webhooks
+      operationId: toggleSubscription
+      summary: Enable or disable a subscription without deleting its history.
+      parameters:
+        - name: subscription_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - active
+              properties:
+                active:
+                  type: boolean
+      responses:
+        '200':
+          description: The new state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  active:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/webhooks/deliveries:
+    get:
+      tags:
+        - webhooks
+      operationId: listDeliveries
+      summary: The outbox - queued, retrying, delivered, and dead-lettered events.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of outbox events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/webhooks/deliveries/{delivery_id}:
+    get:
+      tags:
+        - webhooks
+      operationId: getDelivery
+      summary: One outbox event with every attempt and the exact signed payload.
+      parameters:
+        - $ref: '#/components/parameters/DeliveryId'
+      responses:
+        '200':
+          description: The outbox event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/webhooks/deliveries/{delivery_id}/retry:
+    post:
+      tags:
+        - webhooks
+      operationId: retryDelivery
+      summary: Requeue a retrying or dead-lettered event for immediate delivery.
+      parameters:
+        - $ref: '#/components/parameters/DeliveryId'
+      responses:
+        '200':
+          description: The requeued event.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  status:
+                    type: string
+                  next_attempt_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A scoped RelayOps API key, `relay_<id>_<secret>`.
+    webhookSignature:
+      type: apiKey
+      in: header
+      name: X-RelayOps-Signature
+      description: |
+        `t=<unix seconds>,v1=<hex>` where v1 is
+        HMAC-SHA256(secret, "<t>.<raw body>"). The timestamp must be inside the
+        source tolerance window, which is what makes a captured request unusable
+        later.
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size, 1 to 200.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: Rows to skip.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    WorkflowId:
+      name: workflow_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    AlertId:
+      name: alert_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    DeliveryId:
+      name: delivery_id
+      in: path
+      required: true
+      schema:
+        type: integer
+    SignatureHeader:
+      name: X-RelayOps-Signature
+      in: header
+      required: true
+      description: 't=<unix seconds>,v1=<hex hmac>'
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Defaults to the payload's own external id.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: The request was malformed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: The API key is missing, unknown, or revoked.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The API key lacks the scope this route requires.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: No such resource.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: The resource already exists or is in a conflicting state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unprocessable:
+      description: The request was understood but cannot be applied.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    SignatureRejected:
+      description: The signature was missing, malformed, stale, or wrong.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: signature_expired
+              message: Signature timestamp is outside the 300s tolerance window
+              request_id: req_4a1f0c9d2b7e8a11
+  schemas:
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - request_id
+          properties:
+            code:
+              type: string
+              description: A stable machine-readable code.
+            message:
+              type: string
+            request_id:
+              type: string
+              description: Also returned in the X-Request-Id header and written to the JSON log.
+            details:
+              type: object
+    Pagination:
+      type: object
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+        next_offset:
+          type:
+            - integer
+            - 'null'
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+        version:
+          type: string
+        database:
+          type: string
+        scheduler:
+          type: string
+        llm:
+          type: object
+        slack:
+          type: object
+    Readiness:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        checks:
+          type: object
+          properties:
+            database:
+              type: boolean
+            scheduler:
+              type: boolean
+        checked_at:
+          type: string
+          format: date-time
+    WorkflowStep:
+      type: object
+      properties:
+        id:
+          type: integer
+        position:
+          type: integer
+        name:
+          type: string
+        action:
+          type: string
+        connector_slug:
+          type:
+            - string
+            - 'null'
+        config:
+          type: object
+        retry_limit:
+          type: integer
+        retry_backoff_ms:
+          type: integer
+        manual_minutes:
+          type: number
+        estimate_basis:
+          type: string
+          enum:
+            - per_record
+            - per_run
+    Workflow:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        owner:
+          type: string
+        active:
+          type: boolean
+        trigger:
+          type: string
+        trigger_type:
+          type: string
+          enum:
+            - manual
+            - event
+            - cron
+        schedule_cron:
+          type:
+            - string
+            - 'null'
+        next_run_at:
+          type:
+            - string
+            - 'null'
+        success_rate:
+          type: number
+        runs_30d:
+          type: integer
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowStep'
+    WorkflowPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Workflow'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        metrics:
+          type: object
+        actions:
+          type: array
+          items:
+            type: object
+    Attempt:
+      type: object
+      properties:
+        id:
+          type: integer
+        run_id:
+          type: integer
+        step_id:
+          type: integer
+        step_name:
+          type: string
+        status:
+          type: string
+          enum:
+            - success
+            - failed
+            - skipped
+        attempt:
+          type: integer
+        duration_ms:
+          type: number
+        records_processed:
+          type: integer
+        output_json:
+          type: string
+        error:
+          type:
+            - string
+            - 'null'
+    Run:
+      type: object
+      properties:
+        id:
+          type: integer
+        run_key:
+          type: string
+        workflow_id:
+          type: integer
+        workflow_name:
+          type: string
+        status:
+          type: string
+        trigger_type:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type:
+            - string
+            - 'null'
+        duration_ms:
+          type:
+            - number
+            - 'null'
+        records_processed:
+          type: integer
+        retries:
+          type: integer
+        error:
+          type:
+            - string
+            - 'null'
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+    RunResult:
+      type: object
+      properties:
+        id:
+          type: integer
+        run_key:
+          type: string
+        workflow:
+          type: string
+        status:
+          type: string
+        duration_ms:
+          type: number
+        records_processed:
+          type: integer
+        retries:
+          type: integer
+        error:
+          type:
+            - string
+            - 'null'
+        steps:
+          type: array
+          items:
+            type: object
+    RunPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Run'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    AttemptPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    TimelineEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+        event_type:
+          type: string
+        from_status:
+          type:
+            - string
+            - 'null'
+        to_status:
+          type:
+            - string
+            - 'null'
+        actor:
+          type: string
+        detail:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Alert:
+      type: object
+      properties:
+        id:
+          type: integer
+        dedupe_key:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+        severity:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        escalation_level:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        escalates_at:
+          type:
+            - string
+            - 'null'
+        muted_until:
+          type:
+            - string
+            - 'null'
+        next_status:
+          type:
+            - string
+            - 'null'
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineEntry'
+    AlertPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Alert'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        counts:
+          type: object
+        lifecycle:
+          type: object
+    AlertTransition:
+      type: object
+      properties:
+        alert_id:
+          type: integer
+        from:
+          type: string
+        status:
+          type: string
+        at:
+          type: string
+          format: date-time
+    MuteRule:
+      type: object
+      properties:
+        id:
+          type: integer
+        source_pattern:
+          type: string
+        severity:
+          type: string
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        active:
+          type: integer
+    ReportArtifact:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        report_type:
+          type: string
+        format:
+          type: string
+          enum:
+            - HTML
+            - CSV
+        path:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        row_count:
+          type: integer
+        size_bytes:
+          type: integer
+        generated_by:
+          type: string
+    ReportPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportArtifact'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        schedules:
+          type: array
+          items:
+            type: object
+        metrics:
+          type: object
+    SchedulerJob:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+            - workflow
+            - report
+        next_run:
+          type:
+            - string
+            - 'null'
+        cron:
+          type:
+            - string
+            - 'null'
+    Scheduler:
+      type: object
+      properties:
+        state:
+          type: object
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchedulerJob'
+        events:
+          type: array
+          items:
+            type: object
+    JobPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchedulerJob'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    Connectors:
+      type: object
+      properties:
+        connectors:
+          type: array
+          items:
+            type: object
+        metrics:
+          type: object
+        contracts:
+          type: array
+          items:
+            type: string
+        slack:
+          type: object
+    ConnectorMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        connector:
+          type: string
+        mode:
+          type: string
+          enum:
+            - live
+            - fixture
+        status:
+          type: string
+        status_code:
+          type:
+            - integer
+            - 'null'
+        detail:
+          type: string
+        alert_id:
+          type:
+            - integer
+            - 'null'
+        event_type:
+          type: string
+        payload:
+          type: object
+    ConnectorMessagePage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    OrderWebhook:
+      type: object
+      description: |
+        A storefront order. The mapper accepts the common aliases so an n8n Set
+        node does not have to rename everything: order_id or id or name or
+        order_number; store or store_name or location.name; amount or
+        total_price or total; status or financial_status.
+      required:
+        - created_at
+      properties:
+        id:
+          type: string
+        order_id:
+          type: string
+        order_number:
+          type: integer
+        store:
+          type: string
+        location:
+          type: object
+          properties:
+            name:
+              type: string
+        amount:
+          type: number
+        total_price:
+          type: string
+        currency:
+          type: string
+          default: USD
+        financial_status:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        channel:
+          type: string
+    TicketWebhook:
+      type: object
+      required:
+        - subject
+        - body
+      properties:
+        ticket_id:
+          type: string
+        customer:
+          type: string
+        subject:
+          type: string
+        body:
+          type: string
+        channel:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    WebhookReceipt:
+      type: object
+      properties:
+        receipt_id:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+          enum:
+            - processed
+            - workflow_failed
+            - staged
+        external_id:
+          type: string
+        run_id:
+          type:
+            - integer
+            - 'null'
+        received_at:
+          type: string
+          format: date-time
+        replays:
+          type: integer
+        duplicate:
+          type: boolean
+        detail:
+          type: string
+        result:
+          type: object
+    ReceiptPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookReceipt'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    WebhookSource:
+      type: object
+      properties:
+        slug:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        tolerance_seconds:
+          type: integer
+        workflow_id:
+          type:
+            - integer
+            - 'null'
+        active:
+          type: boolean
+        secret_source:
+          type: string
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        url:
+          type: string
+        event_filter:
+          type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        queued:
+          type: integer
+        delivered:
+          type: integer
+        dead_letter:
+          type: integer
+    SubscriptionCreated:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        url:
+          type: string
+        secret:
+          type: string
+          description: Returned once, at creation.
+        event_filter:
+          type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    Delivery:
+      type: object
+      properties:
+        id:
+          type: integer
+        event_id:
+          type: string
+        event_type:
+          type: string
+          enum:
+            - alert.created
+            - alert.transitioned
+            - alert.escalated
+            - workflow.run.succeeded
+            - workflow.run.failed
+        subscription:
+          type: string
+        url:
+          type: string
+        status:
+          type: string
+          enum:
+            - pending
+            - retrying
+            - delivered
+            - dead_letter
+        attempts:
+          type: integer
+        max_attempts:
+          type: integer
+        next_attempt_at:
+          type: string
+          format: date-time
+        last_status_code:
+          type:
+            - integer
+            - 'null'
+        last_error:
+          type:
+            - string
+            - 'null'
+        delivered_at:
+          type:
+            - string
+            - 'null'
+        alert_id:
+          type:
+            - integer
+            - 'null'
+    DeliveryDetail:
+      type: object
+      properties:
+        id:
+          type: integer
+        status:
+          type: string
+        attempts_log:
+          type: array
+          items:
+            type: object
+        payload:
+          type: object
+    DeliveryPage:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Delivery'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+security:
+  - bearerAuth: []

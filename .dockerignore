@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+node_modules
+data
+examples
+changelog
+integrations/n8n/.n8n
+**/__pycache__
+**/*.pyc
+*.db
+*.db-wal
+*.db-shm
+.env

@@ -1,0 +1,3 @@
+* text=auto eol=lf
+static/vendor/redoc.standalone.js -text linguist-vendored
+examples/*.png binary

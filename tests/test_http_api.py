@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from app import __version__
 from app.db import init_db
 from server import create_server
 
@@ -40,7 +41,7 @@ class HttpApiTestCase(unittest.TestCase):
     def test_health_exposes_scheduler_and_provider(self):
         status, body = self.request("/api/health")
         self.assertEqual(status, 200)
-        self.assertEqual(body["version"], "1.1.0")
+        self.assertEqual(body["version"], __version__)
         self.assertIn("scheduler", body)
         self.assertIn("fallback_available", body["llm"])
 

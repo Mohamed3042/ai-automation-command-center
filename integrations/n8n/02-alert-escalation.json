@@ -1,0 +1,232 @@
+{
+  "updatedAt": "2026-09-05T19:13:16.000Z",
+  "createdAt": "2026-09-05T19:05:46.046Z",
+  "id": "relayops-alert-escalation",
+  "name": "RelayOps - alert escalation",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "relayops-alert",
+        "options": {}
+      },
+      "id": "a00d049f61a1434b",
+      "name": "RelayOps alert webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -260,
+        0
+      ],
+      "webhookId": "9404597d-2fd4-492e-84e8-9ab3143464ce"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f3ea0cb5f7aa4c8c",
+              "leftValue": "={{ ['critical','high'].includes($json.body.data.alert.severity) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "d5d24a2cdfea468f",
+      "name": "Severity is high or critical",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RELAYOPS_BASE_URL }}/api/v1/connectors/slack/notify",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RELAYOPS_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ alert_id: $json.body.data.alert.id, event_type: $json.body.type }) }}"
+      },
+      "id": "67677cd35da84c8c",
+      "name": "Slack Block Kit via the RelayOps connector",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        -110
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.RELAYOPS_BASE_URL }}/api/v1/alerts/{{ $('Severity is high or critical').item.json.body.data.alert.id }}/transition",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.RELAYOPS_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"acknowledged\", actor: \"n8n escalation\", note: \"Escalated to Slack by the n8n alert workflow.\" }) }}"
+      },
+      "id": "03f4175fb83d4037",
+      "name": "Acknowledge the alert in RelayOps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        470,
+        -110
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "754a72f9548c4315",
+              "name": "skipped_severity",
+              "value": "={{ $json.body.data.alert.severity }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "073b4f44fec74148",
+      "name": "Below the escalation threshold",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        110
+      ]
+    }
+  ],
+  "connections": {
+    "RelayOps alert webhook": {
+      "main": [
+        [
+          {
+            "node": "Severity is high or critical",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Severity is high or critical": {
+      "main": [
+        [
+          {
+            "node": "Slack Block Kit via the RelayOps connector",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Below the escalation threshold",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Block Kit via the RelayOps connector": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge the alert in RelayOps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": null,
+  "versionId": "d1947edf-9924-4252-a10a-7521cc5716e6",
+  "activeVersionId": "d1947edf-9924-4252-a10a-7521cc5716e6",
+  "versionCounter": 1,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-09-05T19:05:46.050Z",
+      "createdAt": "2026-09-05T19:05:46.050Z",
+      "role": "workflow:owner",
+      "workflowId": "relayops-alert-escalation",
+      "projectId": "cKEDWVBg7MIXJlmN",
+      "project": {
+        "updatedAt": "2026-09-05T19:02:45.939Z",
+        "createdAt": "2026-09-05T19:02:45.939Z",
+        "id": "cKEDWVBg7MIXJlmN",
+        "name": "Unnamed Project",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "75db09ca-6f96-4ab2-a0c5-177d461bf1f4"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}
