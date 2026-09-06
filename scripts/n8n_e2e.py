@@ -69,11 +69,21 @@ def main() -> int:
     token = args.api_key
 
     print("1. both services answer")
-    wait_for("RelayOps is ready", lambda: call(relayops + "/api/v1/ready")[0] == 200)
-    wait_for("n8n is healthy", lambda: call(n8n + "/healthz")[0] == 200)
+    wait_for("RelayOps is ready", lambda: call(relayops + "/api/v1/ready")[0] == 200, attempts=90, delay=2)
+    wait_for("n8n is healthy", lambda: call(n8n + "/healthz")[0] == 200, attempts=120, delay=2)
 
     print("2. an order posted at n8n reaches RelayOps with a valid signature")
-    status, receipt = call(n8n + "/webhook/relayops-order", ORDER, "POST", timeout=60)
+
+    def order_posted():
+        # n8n answers /healthz before it has registered production webhook routes,
+        # so a 404 here means "not ready yet", not "broken". The idempotency key is
+        # the order id, so a retry that lands twice returns the same receipt.
+        status, body = call(n8n + "/webhook/relayops-order", ORDER, "POST", timeout=60)
+        if status == 404:
+            return None
+        return (status, body)
+
+    status, receipt = wait_for("n8n has registered the order webhook", order_posted, attempts=45, delay=2)
     if status != 200:
         raise SystemExit("FAILED: n8n webhook returned {0}: {1}".format(status, receipt))
     if receipt.get("status") != "processed":
