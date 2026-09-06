@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from urllib.request import Request, urlopen
 
 
@@ -54,7 +55,12 @@ enabled_workflow = request(f"/api/workflows/{created_workflow['id']}/toggle", {"
 builder_run = request(f"/api/workflows/{created_workflow['id']}/run", {})
 
 rule_result = request("/api/alerts/evaluate", {})
-scheduler_tick = request("/api/scheduler/tick", {"now": "2026-08-03T07:00:00Z"})
+# Tick far enough ahead that every seeded schedule is due, whatever today is: eight
+# days covers the */30 workflow, the daily close, the weekday pack and the Monday
+# review. A literal date here rots - once real time passes it, the background
+# scheduler has already advanced every next-run and a tick then fires nothing.
+tick_at = (datetime.now(timezone.utc) + timedelta(days=8)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+scheduler_tick = request("/api/scheduler/tick", {"now": tick_at})
 daily_files = request("/api/reports/generate", {"report_type": "daily"})
 weekly_files = request("/api/reports/generate", {"report_type": "weekly"})
 
@@ -81,7 +87,9 @@ assert mute["active"] == 1
 assert [step["action"] for step in updated_workflow["steps"]] == ["sales.aggregate", "metrics.increment"]
 assert paused_workflow["active"] is False and enabled_workflow["active"] is True
 assert builder_run["status"] == "success"
-assert scheduler_tick["fired"] and scheduler["state"]["jobs_fired"] >= len(scheduler_tick["fired"])
+assert len(scheduler_tick["fired"]) == 5, f"a tick eight days ahead must fire all five seeded jobs, fired {scheduler_tick['fired']}"
+assert scheduler["state"]["jobs_fired"] >= len(scheduler_tick["fired"])
+assert all(datetime.fromisoformat(job["next_run"].replace("Z", "+00:00")) > datetime.fromisoformat(tick_at.replace("Z", "+00:00")) for job in scheduler["jobs"]), "every fired job must have advanced past the tick"
 assert all(job["next_run"] for job in scheduler["jobs"])
 assert intelligence["adapter"]["fallback_available"] is True
 assert intelligence["support"]["metrics"]["automation_rate"] >= 80
@@ -96,7 +104,7 @@ print(f"  real order pipeline: {order_run['records_processed']} row results; 12 
 print(f"  support classification: {support_run['records_processed']} row results; {intelligence['support']['metrics']['automation_rate']}% auto-routing")
 print(f"  retry evidence: transient={retry_run['retries']} retry; terminal={failure_run['retries']} retries + downstream skips")
 print(f"  workflow builder: created, reordered, toggled, and ran workflow {created_workflow['id']}")
-print(f"  scheduler: fired {len(scheduler_tick['fired'])} due jobs; {len(scheduler['jobs'])} next runs visible")
-print(f"  alert lifecycle: failure alert {failure_alert_id} acknowledged → investigating → resolved; mute {mute['id']} active")
+print(f"  scheduler: tick at {tick_at} fired {len(scheduler_tick['fired'])} due jobs; {len(scheduler['jobs'])} next runs advanced")
+print(f"  alert lifecycle: failure alert {failure_alert_id} acknowledged -> investigating -> resolved; mute {mute['id']} active")
 print(f"  time returned: {workflows['metrics']['hours_saved']['minutes']} calculated minutes from observed volume")
 print(f"  report vault: {reports['metrics']['generated_30d']} persisted artifacts")

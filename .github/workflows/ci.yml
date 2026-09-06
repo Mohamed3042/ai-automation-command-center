@@ -58,7 +58,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install --require-hashes=false -r requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
       # With PyYAML and openapi-spec-validator present, the contract tests also
       # check the standard-library YAML reader against PyYAML and validate the
       # document against the OpenAPI 3.1 schema.
@@ -117,18 +117,30 @@ jobs:
           } > .env
           # The signing secret is one value on both sides of the wire.
           echo "RELAYOPS_WEBHOOK_SECRET=$(grep RELAYOPS_WEBHOOK_SECRET_ORDERS .env | cut -d= -f2)" >> .env
-      - name: Start RelayOps and n8n
-        run: docker compose up -d --build
-      - name: Import and activate the three workflows
+      - name: Start RelayOps
         run: |
-          docker compose exec -T n8n n8n import:workflow --separate --input=/workflows
-          docker compose exec -T n8n n8n update:workflow --id=relayops-order-intake --active=true
-          docker compose exec -T n8n n8n update:workflow --id=relayops-alert-escalation --active=true
-          docker compose restart n8n
+          docker compose up -d --build relayops
           for _ in $(seq 1 60); do
+            [ "$(docker inspect --format '{{.State.Health.Status}}' relayops)" = "healthy" ] && break
+            sleep 2
+          done
+          docker inspect --format 'relayops health={{.State.Health.Status}}' relayops | grep healthy
+      - name: Import and activate the three workflows
+        # One-shot containers against the same volume, with the n8n server not yet
+        # running: each `n8n <command>` boots a full node process, and running them
+        # beside the server is what made this job exit 137 on the runner.
+        run: |
+          docker compose run --rm --no-deps --entrypoint n8n n8n import:workflow --separate --input=/workflows
+          docker compose run --rm --no-deps --entrypoint n8n n8n update:workflow --id=relayops-order-intake --active=true
+          docker compose run --rm --no-deps --entrypoint n8n n8n update:workflow --id=relayops-alert-escalation --active=true
+      - name: Start n8n with the workflows already active
+        run: |
+          docker compose up -d n8n
+          for _ in $(seq 1 90); do
             curl -fsS http://localhost:5678/healthz >/dev/null 2>&1 && break
             sleep 2
           done
+          curl -fsS http://localhost:5678/healthz
       - name: Fire a real order through n8n and assert it landed
         run: |
           set -a && . ./.env && set +a
