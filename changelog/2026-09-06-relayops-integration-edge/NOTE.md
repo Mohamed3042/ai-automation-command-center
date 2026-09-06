@@ -31,13 +31,13 @@ deliberately not part of the OpenAPI contract.
 real traffic: four inbound receipts with one replay refused, an outbound outbox where
 eight events delivered and one dead-lettered after five attempts with a retry control,
 and the Slack connector honestly labelled *fixture*.
-**Shots:** 03-ci-n8n-e2e-green.png - the CI run: five jobs green on a clean Ubuntu
-runner, with `n8n-e2e` importing the three workflows into a fresh n8n container,
-firing a real order through them, and asserting the nightly report artifact was
-written.
 **Shots:** 02-api-reference.png — `/api/v1/docs`, the vendored Redoc page rendering the
 hand-authored OpenAPI 3.1 document that a test compares with the router in both
 directions.
+**Shots:** 03-ci-n8n-e2e-green.png — the CI run: five jobs green on a clean Ubuntu
+runner, with `n8n-e2e` importing the three workflows into a fresh n8n container,
+firing a real order through them, and asserting the nightly report artifact was
+written.
 
 **LinkedIn paste:** RelayOps v1.2 turns a self-contained retail operations control
 plane into something other systems can drive: a versioned REST API with scoped keys,
